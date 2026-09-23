@@ -1,4 +1,4 @@
-import { doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore'
+import { collection, doc, getDoc, serverTimestamp, updateDoc, writeBatch } from 'firebase/firestore'
 import { db } from './firebase'
 import {
   DEFAULT_DURATION_SECONDS,
@@ -8,18 +8,19 @@ import {
 } from '../types/timer'
 
 /**
- * Timer service — Phase 5.
+ * Timer service — Phase 5 (Phase 6 atomic completion evidence added).
  *
  * Firestore is the authoritative room/timer state. Every transition is a
- * single atomic updateDoc; security rules validate each write against the
- * committed document at request time (true server clock). No client clock
- * ever enters Firestore.
+ * single atomic updateDoc or batched write; security rules validate each
+ * write against the committed document at request time (true server clock).
+ * No client clock ever enters Firestore.
  *
  * State machine (rules-enforced):
  *   idle -> running (start, remaining preserved)
  *   running -> paused (pause, floor-of-truth remaining, no grace)
  *   paused -> running (resume, remaining preserved exactly)
- *   running -> completed (complete, only after true server-side expiry)
+ *   running -> completed (complete, only after true server-side expiry;
+ *                         atomically writes immutable completion evidence)
  *   running/paused/completed -> idle (reset, restores default)
  *
  * Pause conflict policy (approved rev 3): if the server rejects the pause
@@ -30,6 +31,7 @@ import {
  */
 
 const ROOMS = 'rooms'
+const COMPLETIONS = 'completions'
 
 /** Delay before the single silent network retry. */
 const NETWORK_RETRY_DELAY_MS = 800
@@ -125,8 +127,14 @@ function toTimerError(error: unknown): never {
 // Core plumbing
 // ---------------------------------------------------------------------------
 
-/** Reads the room's current timer state (member read). */
-async function readTimer(roomId: string): Promise<TimerState> {
+interface RoomSnapshotData {
+  timer: TimerState
+  memberIds: string[]
+  roomCode: string
+}
+
+/** Reads the room document and extracts timer, membership, and code. */
+async function readRoom(roomId: string): Promise<RoomSnapshotData> {
   let snap
   try {
     snap = await getDoc(doc(db, ROOMS, roomId))
@@ -136,11 +144,20 @@ async function readTimer(roomId: string): Promise<TimerState> {
   if (!snap!.exists()) {
     throw new TimerError('not-found', 'This room is no longer available.')
   }
-  const timer = snap!.data().timer as TimerState | undefined
+  const data = snap!.data()
+  const timer = data.timer as TimerState | undefined
   if (!timer || typeof timer.status !== 'string' || typeof timer.remainingSeconds !== 'number') {
     throw new TimerError('unknown', 'Timer state is unavailable.')
   }
-  return timer
+  const memberIds = Array.isArray(data.memberIds) ? (data.memberIds as string[]) : []
+  const roomCode = typeof data.roomCode === 'string' ? data.roomCode : ''
+  return { timer, memberIds, roomCode }
+}
+
+/** Reads the room's current timer state (member read). */
+async function readTimer(roomId: string): Promise<TimerState> {
+  const room = await readRoom(roomId)
+  return room.timer
 }
 
 /** Single write attempt; rules are the authority. */
@@ -244,15 +261,37 @@ export async function resetTimer(roomId: string): Promise<void> {
  * running -> completed. Rules gate this on true server-side expiry; a
  * premature attempt is rejected ('too-early' is indistinguishable from a
  * conflict client-side, and the UI simply resyncs).
+ *
+ * Phase 6: Atomically updates rooms/{roomId}.timer and creates an immutable
+ * completion evidence record in rooms/{roomId}/completions/{completionId}.
  */
 export async function completeTimerIfDue(roomId: string): Promise<void> {
   try {
-    await writeTransition(roomId, {
-      status: 'completed',
-      remainingSeconds: 0,
-      transitionedAt: serverTimestamp(),
+    const room = await readRoom(roomId)
+    assertStatus(room.timer, 'running')
+
+    const roomRef = doc(db, ROOMS, roomId)
+    const completionRef = doc(collection(db, ROOMS, roomId, COMPLETIONS))
+
+    await withNetworkRetry(async () => {
+      const batch = writeBatch(db)
+      batch.update(roomRef, {
+        timer: {
+          status: 'completed',
+          remainingSeconds: 0,
+          transitionedAt: serverTimestamp(),
+        },
+      })
+      batch.set(completionRef, {
+        completedAt: serverTimestamp(),
+        durationSeconds: DEFAULT_DURATION_SECONDS,
+        memberIds: room.memberIds,
+        roomCode: room.roomCode,
+      })
+      await batch.commit()
     })
   } catch (error) {
     toTimerError(error)
   }
 }
+
