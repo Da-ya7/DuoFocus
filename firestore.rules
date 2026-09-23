@@ -1,0 +1,109 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Path builders for getAfter()/existsAfter() cross-document checks.
+    function roomPath(roomId) {
+      return /databases/$(database)/documents/rooms/$(roomId);
+    }
+    function codePath(code) {
+      return /databases/$(database)/documents/roomCodes/$(code);
+    }
+
+    // ------------------------------------------------------------------
+    // roomCodes/{roomCode} — lookup only. Maps a human room code to a
+    // room document ID. Contains NO membership data.
+    // ------------------------------------------------------------------
+    match /roomCodes/{code} {
+
+      // Single-code lookup for the join flow. Codes cannot be enumerated.
+      allow get: if signedIn();
+
+      allow list: if false;
+
+      // A code may only be claimed together with the room it points to.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['roomId'])
+        && request.resource.data.keys().hasAll(['roomId'])
+        && request.resource.data.roomId is string
+        && request.resource.data.roomId.size() > 0
+        && existsAfter(roomPath(request.resource.data.roomId));
+
+      // Codes are immutable once claimed.
+      allow update: if false;
+
+      // A code may only be deleted as the paired half of a final-member
+      // leave: the caller must be the sole current member of the linked
+      // room, and the room must be deleted in the SAME batched write.
+      // get()/existsAfter() evaluate server-side with full privileges.
+      allow delete: if signedIn()
+        && get(roomPath(resource.data.roomId)).data.memberIds == [request.auth.uid]
+        && !existsAfter(roomPath(resource.data.roomId));
+    }
+
+    // ------------------------------------------------------------------
+    // rooms/{roomId} — the two-person study room.
+    // ------------------------------------------------------------------
+    match /rooms/{roomId} {
+
+      // Members only. Covers both get and member-scoped list queries.
+      allow read: if signedIn()
+        && request.auth.uid in resource.data.memberIds;
+
+      // A room is only created together with its roomCodes document.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['roomCode', 'ownerId', 'memberIds', 'createdAt'])
+        && request.resource.data.keys().hasAll(['roomCode', 'ownerId', 'memberIds', 'createdAt'])
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.memberIds == [request.auth.uid]
+        && request.resource.data.roomCode is string
+        && request.resource.data.roomCode.matches('^[2-9A-HJ-NP-Z]{6}$')
+        && request.resource.data.createdAt == request.time
+        && getAfter(codePath(request.resource.data.roomCode)).data.roomId == roomId;
+
+      // Updates may ONLY touch memberIds, and only in two exact shapes:
+      //
+      //   JOIN  1 -> 2 : the caller (a non-member) adds themselves to a
+      //                  one-member room. The result is provably
+      //                  [sole member, caller] — the two-cap cannot be
+      //                  bypassed and no third member can ever exist.
+      //
+      //   LEAVE 2 -> 1 : the caller (a member) removes only their own
+      //                  UID. ownerId/roomCode/createdAt are frozen by
+      //                  the affectedKeys() constraint above.
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data)
+             .affectedKeys().hasOnly(['memberIds'])
+        && request.resource.data.memberIds is list
+        && (
+             (
+               resource.data.memberIds.size() == 1
+               && !(request.auth.uid in resource.data.memberIds)
+               && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+               && request.auth.uid in request.resource.data.memberIds
+               && request.resource.data.memberIds.size() == 2
+             )
+             ||
+             (
+               resource.data.memberIds.size() == 2
+               && request.auth.uid in resource.data.memberIds
+               && !(request.auth.uid in request.resource.data.memberIds)
+               && resource.data.memberIds.hasAll(request.resource.data.memberIds)
+               && request.resource.data.memberIds.size() == 1
+             )
+           );
+
+      // A room may only be deleted as the paired half of a final-member
+      // leave: the caller must be the sole current member, and the
+      // roomCodes document must be deleted in the SAME batched write.
+      allow delete: if signedIn()
+        && resource.data.memberIds == [request.auth.uid]
+        && !existsAfter(codePath(resource.data.roomCode));
+    }
+  }
+}

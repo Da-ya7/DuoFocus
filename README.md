@@ -13,7 +13,7 @@ Create a session, focus side by side, keep each other accountable — no noise, 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-F9C400?style=for-the-badge&logo=open-source-initiative&logoColor=white)
 
-![Status](https://img.shields.io/badge/Status-Phase_1_Foundation-brightgreen?style=flat-square)
+![Status](https://img.shields.io/badge/Status-Phase_4_Study_Rooms-brightgreen?style=flat-square)
 ![PRs](https://img.shields.io/badge/PRs-private_project-orange?style=flat-square)
 
 </div>
@@ -24,18 +24,21 @@ Create a session, focus side by side, keep each other accountable — no noise, 
 
 **DuoFocus** is a minimal, distraction-free study-together application built for exactly **two people**. Instead of joining crowded study servers, you and your study partner share a private space: synchronized focus sessions, a shared timer, and gentle accountability — nothing more.
 
-The project is currently at **Phase 1 (Foundation)**: a clean, verified frontend and backend skeleton that later phases will build on. See the [Roadmap](#roadmap) for what's coming.
+The project is currently at **Phase 4 (Study Rooms)**: Firebase authentication plus private two-person study rooms backed by Cloud Firestore. See the [Roadmap](#roadmap) for what's coming.
 
 > ⚠️ **Work in progress** — DuoFocus is under active development. Features listed in the [Roadmap](#roadmap) are **not implemented yet**.
 
 ## ✨ Features
 
-**Current (Phase 1):**
+**Current (Phases 1–4):**
 
 - ⚙️ **FastAPI backend** with a `GET /health` service check
 - 📘 **Auto-generated Swagger / OpenAPI docs** at `/docs`
 - ⚛️ **React 18 + Vite** dev environment with instant hot-module reload
 - 🔒 **Strict TypeScript** configuration (`strict`, `noUnusedLocals`, `noUnusedParameters`)
+- 🔐 **Firebase Authentication** — email/password sign-up, login, logout, protected `/app` routes
+- 🏠 **Two-person study rooms** — create a room, share a 6-character code, join by code, live membership updates via Firestore real-time listeners
+- 🛡 **Hardened Firestore security rules** — member-only room reads, shape-exhaustive join/leave writes, atomic room↔code lifecycle, no enumeration of room codes
 - 🧹 **Clean repository hygiene** — venvs, builds, env files, and editor junk are ignored
 
 ## 🛠 Tech Stack
@@ -48,6 +51,8 @@ The project is currently at **Phase 1 (Foundation)**: a clean, verified frontend
 | Backend | [Python](https://www.python.org) | 3.13+ | Runtime |
 | Backend | [FastAPI](https://fastapi.tiangolo.com) | 0.115 | API framework |
 | Backend | [Uvicorn](https://www.uvicorn.org) | 0.34 | ASGI server |
+| Data | [Cloud Firestore](https://firebase.google.com/docs/firestore) | — | Room storage & real-time sync |
+| Auth | [Firebase Authentication](https://firebase.google.com/docs/auth) | — | Email/password identity |
 
 ## 🏗 Architecture
 
@@ -72,8 +77,15 @@ duofocus/
 │   ├── src/
 │   │   ├── main.tsx           # React entry point
 │   │   ├── App.tsx            # Root component
-│   │   ├── index.css          # Global styles
-│   │   └── vite-env.d.ts      # Vite client types
+│   │   ├── index.css          # Global styles (Tailwind entry)
+│   │   ├── components/        # Reusable UI primitives
+│   │   ├── context/           # AuthContext (Firebase auth state)
+│   │   ├── layouts/           # Shared page chrome
+│   │   ├── pages/             # Home / Auth / AppHome / Room / 404
+│   │   ├── routes/            # Route table + protected route
+│   │   ├── services/          # firebase.ts · api.ts · rooms.ts
+│   │   ├── types/             # Shared + room domain types
+│   │   └── vite-env.d.ts      # Vite client + env types
 │   ├── index.html             # HTML entry
 │   ├── package.json
 │   ├── tsconfig.json
@@ -81,9 +93,13 @@ duofocus/
 ├── backend/                   # FastAPI
 │   ├── app/
 │   │   ├── __init__.py
-│   │   └── main.py            # App instance + /health endpoint
+│   │   ├── main.py            # App instance + /health + /api/auth/me
+│   │   └── auth/              # Firebase Admin token verification
 │   ├── requirements.txt
 │   └── .env.example           # Environment variable template
+├── firestore.rules            # Firestore security rules (rooms + roomCodes)
+├── firebase.json              # Firebase config (rules source of truth)
+├── .firebaserc                # Firebase project alias
 ├── .gitignore
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
@@ -134,6 +150,21 @@ npm install
 npm run dev
 ```
 
+### Deploy Firestore Security Rules
+
+Room security is enforced by [`firestore.rules`](firestore.rules) at the database level — never rely on the UI alone. After changing rules, deploy them:
+
+```bash
+# One-time: install the Firebase CLI and sign in
+npm install -g firebase-tools
+firebase login
+
+# From the repo root — .firebaserc points at your Firebase project
+firebase deploy --only firestore:rules
+```
+
+The rules enforce: member-only room reads, join only into a one-member room by adding your own UID, leave only by removing your own UID, immutable `ownerId`/`roomCode`/`createdAt`, a hard two-member cap, and room↔roomCode documents that can only be created or deleted together (no orphaned codes).
+
 ### Verify the Installation
 
 | Service | URL | Expected |
@@ -179,10 +210,11 @@ npm run dev
 ## 🗺 Roadmap
 
 - [x] **Phase 1 — Foundation**: React + Vite + TypeScript frontend, FastAPI backend, health check
-- [ ] **Authentication** — accounts and login (Firebase)
-- [ ] **Study rooms** — private two-person rooms
-- [ ] **Focus timer** — shared synchronized study sessions
-- [ ] **Statistics** — session history and study insights
+- [x] **Phase 2 — Frontend Foundation**: routing, Tailwind, layout/pages/services/types structure
+- [x] **Phase 3 — Authentication**: Firebase email/password, protected routes, backend token verification
+- [x] **Phase 4 — Study Rooms**: create/join by code, real-time membership, hardened Firestore rules
+- [ ] **Phase 5 — Focus timer**: shared synchronized study sessions
+- [ ] **Phase 6 — Statistics**: session history and study insights
 
 ## 🧰 Troubleshooting
 

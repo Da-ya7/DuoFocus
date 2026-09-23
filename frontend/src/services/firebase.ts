@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
+import { getFirestore } from 'firebase/firestore'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -15,6 +16,9 @@ export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfi
 
 // Initialize Firebase Auth instance
 export const auth = getAuth(app)
+
+// Initialize Cloud Firestore instance
+export const db = getFirestore(app)
 
 /**
  * Utility to retrieve the current user's Firebase ID token.
