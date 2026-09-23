@@ -9,9 +9,10 @@ import {
   joinRoom,
   normalizeRoomCode,
 } from '../services/rooms'
-import { getUserSessions } from '../services/sessions'
+import { deleteUserSession, getUserSessions } from '../services/sessions'
 import { calculateStudyStatistics } from '../utils/stats'
 import { StatsSummary } from '../components/stats/StatsSummary'
+import { SessionHistory } from '../components/stats/SessionHistory'
 import { RoomError } from '../types/room'
 import type { StudySession } from '../types/session'
 
@@ -45,6 +46,8 @@ export function AppHomePage() {
   const [sessions, setSessions] = useState<StudySession[]>([])
   const [statsLoading, setStatsLoading] = useState(true)
   const [statsError, setStatsError] = useState<string | null>(null)
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!uid) return
@@ -98,6 +101,19 @@ export function AppHomePage() {
   }, [uid])
 
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
+
+  const handleDeleteSession = async (sessionId: string) => {
+    setDeleteError(null)
+    setDeletingSessionId(sessionId)
+    try {
+      await deleteUserSession(sessionId)
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId))
+    } catch {
+      setDeleteError('Could not delete this session. Please try again.')
+    } finally {
+      setDeletingSessionId(null)
+    }
+  }
 
   const normalizedCode = useMemo(() => normalizeRoomCode(code), [code])
   const codeIsValid = isValidRoomCode(normalizedCode)
@@ -261,6 +277,30 @@ export function AppHomePage() {
             </div>
           ) : (
             <StatsSummary statistics={statistics} />
+          )}
+
+          {/* Study History Section */}
+          {!statsLoading && !statsError && (
+            <div className="mt-6">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Study History
+              </h2>
+
+              {deleteError && (
+                <div
+                  role="alert"
+                  className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2.5 text-center text-xs text-red-700"
+                >
+                  {deleteError}
+                </div>
+              )}
+
+              <SessionHistory
+                sessions={sessions}
+                onDelete={handleDeleteSession}
+                deletingSessionId={deletingSessionId}
+              />
+            </div>
           )}
         </div>
 
