@@ -9,7 +9,11 @@ import {
   joinRoom,
   normalizeRoomCode,
 } from '../services/rooms'
+import { getUserSessions } from '../services/sessions'
+import { calculateStudyStatistics } from '../utils/stats'
+import { StatsSummary } from '../components/stats/StatsSummary'
 import { RoomError } from '../types/room'
+import type { StudySession } from '../types/session'
 
 function friendlyRoomError(error: unknown): string {
   if (error instanceof RoomError) {
@@ -37,6 +41,11 @@ export function AppHomePage() {
   } | null>(null)
   const [activeRoomChecked, setActiveRoomChecked] = useState(false)
 
+  // Personal study sessions & statistics state
+  const [sessions, setSessions] = useState<StudySession[]>([])
+  const [statsLoading, setStatsLoading] = useState(true)
+  const [statsError, setStatsError] = useState<string | null>(null)
+
   useEffect(() => {
     if (!uid) return
     let cancelled = false
@@ -56,6 +65,39 @@ export function AppHomePage() {
       cancelled = true
     }
   }, [uid])
+
+  useEffect(() => {
+    if (!uid) {
+      setStatsLoading(false)
+      return
+    }
+    let cancelled = false
+    setStatsLoading(true)
+    setStatsError(null)
+
+    getUserSessions()
+      .then((data) => {
+        if (!cancelled) {
+          setSessions(data)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStatsError('Could not load your study statistics.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setStatsLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [uid])
+
+  const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
 
   const normalizedCode = useMemo(() => normalizeRoomCode(code), [code])
   const codeIsValid = isValidRoomCode(normalizedCode)
@@ -200,6 +242,27 @@ export function AppHomePage() {
             </form>
           </>
         )}
+
+        {/* Study Statistics Section */}
+        <div className="mt-8 border-t border-slate-200 pt-6">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Study Statistics
+          </h2>
+          {statsLoading ? (
+            <div className="rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-xs text-slate-400">
+              Loading statistics…
+            </div>
+          ) : statsError ? (
+            <div
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 p-3 text-center text-xs text-red-700"
+            >
+              {statsError}
+            </div>
+          ) : (
+            <StatsSummary statistics={statistics} />
+          )}
+        </div>
 
         <button
           type="button"
