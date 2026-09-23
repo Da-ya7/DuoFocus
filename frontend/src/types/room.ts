@@ -1,11 +1,13 @@
 /**
- * Room domain types — Phase 4.
+ * Room domain types — Phase 4 (timer field added in Phase 5).
  *
  * Firestore model:
  *
  *   roomCodes/{roomCode} → { roomId: string }          (code → room lookup only)
  *   rooms/{roomId}       → Room (below)
  */
+
+import type { TimerState, TimestampLike } from './timer'
 
 /** Alphabet without ambiguous characters (no 0, 1, I, L, O). */
 export const ROOM_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ' as const
@@ -25,12 +27,8 @@ export interface Room {
   memberIds: string[]
   /** Server timestamp of creation. */
   createdAt: TimestampLike
-}
-
-/** Minimal structural type so `types/room.ts` stays independent of the SDK. */
-export interface TimestampLike {
-  readonly seconds: number
-  readonly nanoseconds: number
+  /** Room-level shared study timer (Phase 5; born idle). */
+  timer: TimerState
 }
 
 /** Typed error thrown by the room service layer. */

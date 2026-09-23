@@ -22,6 +22,7 @@ import {
   RoomError,
   type Room,
 } from '../types/room'
+import { DEFAULT_DURATION_SECONDS } from '../types/timer'
 
 /**
  * Room service — Phase 4.
@@ -122,6 +123,11 @@ export async function createRoom(): Promise<{ roomId: string; roomCode: string }
         ownerId: uid,
         memberIds: [uid],
         createdAt: serverTimestamp(),
+        timer: {
+          status: 'idle',
+          remainingSeconds: DEFAULT_DURATION_SECONDS,
+          transitionedAt: serverTimestamp(),
+        },
       })
 
       return { roomId: roomRef.id, roomCode: code }

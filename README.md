@@ -13,7 +13,7 @@ Create a session, focus side by side, keep each other accountable — no noise, 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-F9C400?style=for-the-badge&logo=open-source-initiative&logoColor=white)
 
-![Status](https://img.shields.io/badge/Status-Phase_4_Study_Rooms-brightgreen?style=flat-square)
+![Status](https://img.shields.io/badge/Status-Phase_5_Shared_Timer-brightgreen?style=flat-square)
 ![PRs](https://img.shields.io/badge/PRs-private_project-orange?style=flat-square)
 
 </div>
@@ -24,13 +24,13 @@ Create a session, focus side by side, keep each other accountable — no noise, 
 
 **DuoFocus** is a minimal, distraction-free study-together application built for exactly **two people**. Instead of joining crowded study servers, you and your study partner share a private space: synchronized focus sessions, a shared timer, and gentle accountability — nothing more.
 
-The project is currently at **Phase 4 (Study Rooms)**: Firebase authentication plus private two-person study rooms backed by Cloud Firestore. See the [Roadmap](#roadmap) for what's coming.
+The project is currently at **Phase 5 (Shared Focus Timer)**: Firebase authentication, private two-person study rooms, and a synchronized room-level study timer backed by Cloud Firestore. See the [Roadmap](#roadmap) for what's coming.
 
 > ⚠️ **Work in progress** — DuoFocus is under active development. Features listed in the [Roadmap](#roadmap) are **not implemented yet**.
 
 ## ✨ Features
 
-**Current (Phases 1–4):**
+**Current (Phases 1–5):**
 
 - ⚙️ **FastAPI backend** with a `GET /health` service check
 - 📘 **Auto-generated Swagger / OpenAPI docs** at `/docs`
@@ -38,7 +38,8 @@ The project is currently at **Phase 4 (Study Rooms)**: Firebase authentication p
 - 🔒 **Strict TypeScript** configuration (`strict`, `noUnusedLocals`, `noUnusedParameters`)
 - 🔐 **Firebase Authentication** — email/password sign-up, login, logout, protected `/app` routes
 - 🏠 **Two-person study rooms** — create a room, share a 6-character code, join by code, live membership updates via Firestore real-time listeners
-- 🛡 **Hardened Firestore security rules** — member-only room reads, shape-exhaustive join/leave writes, atomic room↔code lifecycle, no enumeration of room codes
+- ⏱ **Shared focus timer** — one room-level 25-minute timer with start/pause/resume/reset, server-anchored state, real-time sync across both browsers, and race-safe concurrency enforced by Firestore rules
+- 🛡 **Hardened Firestore security rules** — member-only room reads, shape-exhaustive join/leave/timer writes, atomic room↔code lifecycle, no enumeration of room codes
 - 🧹 **Clean repository hygiene** — venvs, builds, env files, and editor junk are ignored
 
 ## 🛠 Tech Stack
@@ -213,7 +214,7 @@ The rules enforce: member-only room reads, join only into a one-member room by a
 - [x] **Phase 2 — Frontend Foundation**: routing, Tailwind, layout/pages/services/types structure
 - [x] **Phase 3 — Authentication**: Firebase email/password, protected routes, backend token verification
 - [x] **Phase 4 — Study Rooms**: create/join by code, real-time membership, hardened Firestore rules
-- [ ] **Phase 5 — Focus timer**: shared synchronized study sessions
+- [x] **Phase 5 — Shared Focus Timer**: synchronized room-level timer with rules-enforced state machine
 - [ ] **Phase 6 — Statistics**: session history and study insights
 
 ## 🧰 Troubleshooting

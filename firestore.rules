@@ -27,11 +27,14 @@ service cloud.firestore {
       allow list: if false;
 
       // A code may only be claimed together with the room it points to.
+      // The room must NOT exist before the batch and MUST exist after it —
+      // this forbids squatter code docs pointing at pre-existing rooms.
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly(['roomId'])
         && request.resource.data.keys().hasAll(['roomId'])
         && request.resource.data.roomId is string
         && request.resource.data.roomId.size() > 0
+        && !exists(roomPath(request.resource.data.roomId))
         && existsAfter(roomPath(request.resource.data.roomId));
 
       // Codes are immutable once claimed.
@@ -51,50 +54,102 @@ service cloud.firestore {
     // ------------------------------------------------------------------
     match /rooms/{roomId} {
 
+      function timerValid(next, prev) {
+        return next.keys().hasOnly(['status', 'remainingSeconds', 'transitionedAt'])
+          && next.keys().hasAll(['status', 'remainingSeconds', 'transitionedAt'])
+          && next.transitionedAt == request.time
+          && next.remainingSeconds is int
+          && next.remainingSeconds >= 0
+          && next.remainingSeconds <= 3600
+          && (
+               // Start: idle -> running, remaining preserved (idle holds the
+               // configured duration, 25:00).
+               (prev.status == 'idle' && next.status == 'running'
+                 && next.remainingSeconds == prev.remainingSeconds
+                 && prev.remainingSeconds == 1500)
+               // Pause: running -> paused. The stored remaining must be at
+               // least 1 s and can NEVER exceed the true remaining at commit
+               // (request.time, no grace) — pause can only decrease time.
+               || (prev.status == 'running' && next.status == 'paused'
+                 && next.remainingSeconds >= 1
+                 && next.remainingSeconds * 1000
+                      <= prev.transitionedAt.toMillis()
+                         + prev.remainingSeconds * 1000
+                         - request.time.toMillis())
+               // Resume: paused -> running, remaining preserved EXACTLY.
+               || (prev.status == 'paused' && next.status == 'running'
+                 && next.remainingSeconds == prev.remainingSeconds)
+               // Complete: only after true server-side expiry; zero remaining.
+               || (prev.status == 'running' && next.status == 'completed'
+                 && next.remainingSeconds == 0
+                 && prev.transitionedAt.toMillis()
+                      + prev.remainingSeconds * 1000
+                      <= request.time.toMillis())
+               // Reset: any active/completed state -> idle, default restored.
+               || (prev.status in ['running', 'paused', 'completed']
+                 && next.status == 'idle'
+                 && next.remainingSeconds == 1500)
+             );
+      }
+
       // Members only. Covers both get and member-scoped list queries.
       allow read: if signedIn()
         && request.auth.uid in resource.data.memberIds;
 
       // A room is only created together with its roomCodes document.
       allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['roomCode', 'ownerId', 'memberIds', 'createdAt'])
-        && request.resource.data.keys().hasAll(['roomCode', 'ownerId', 'memberIds', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['roomCode', 'ownerId', 'memberIds', 'createdAt', 'timer'])
+        && request.resource.data.keys().hasAll(['roomCode', 'ownerId', 'memberIds', 'createdAt', 'timer'])
         && request.resource.data.ownerId == request.auth.uid
         && request.resource.data.memberIds == [request.auth.uid]
         && request.resource.data.roomCode is string
         && request.resource.data.roomCode.matches('^[2-9A-HJ-NP-Z]{6}$')
         && request.resource.data.createdAt == request.time
+        && request.resource.data.timer.keys().hasOnly(['status', 'remainingSeconds', 'transitionedAt'])
+        && request.resource.data.timer.keys().hasAll(['status', 'remainingSeconds', 'transitionedAt'])
+        && request.resource.data.timer.status == 'idle'
+        && request.resource.data.timer.remainingSeconds == 1500
+        && request.resource.data.timer.transitionedAt == request.time
         && getAfter(codePath(request.resource.data.roomCode)).data.roomId == roomId;
 
-      // Updates may ONLY touch memberIds, and only in two exact shapes:
-      //
-      //   JOIN  1 -> 2 : the caller (a non-member) adds themselves to a
-      //                  one-member room. The result is provably
-      //                  [sole member, caller] — the two-cap cannot be
-      //                  bypassed and no third member can ever exist.
-      //
-      //   LEAVE 2 -> 1 : the caller (a member) removes only their own
-      //                  UID. ownerId/roomCode/createdAt are frozen by
-      //                  the affectedKeys() constraint above.
+      // Updates may ONLY touch memberIds (join/leave shapes) OR the timer
+      // (exact transition shapes). All other room fields are frozen by the
+      // affectedKeys() constraints in both branches.
       allow update: if signedIn()
-        && request.resource.data.diff(resource.data)
-             .affectedKeys().hasOnly(['memberIds'])
-        && request.resource.data.memberIds is list
         && (
-             (
-               resource.data.memberIds.size() == 1
-               && !(request.auth.uid in resource.data.memberIds)
-               && request.resource.data.memberIds.hasAll(resource.data.memberIds)
-               && request.auth.uid in request.resource.data.memberIds
-               && request.resource.data.memberIds.size() == 2
+             // ---- Phase 4: membership branch (unchanged) ----
+             ( request.resource.data.diff(resource.data)
+                  .affectedKeys().hasOnly(['memberIds'])
+               && request.resource.data.memberIds is list
+               && (
+                    (
+                      resource.data.memberIds.size() == 1
+                      && !(request.auth.uid in resource.data.memberIds)
+                      && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+                      && request.auth.uid in request.resource.data.memberIds
+                      && request.resource.data.memberIds.size() == 2
+                    )
+                    ||
+                    (
+                      resource.data.memberIds.size() == 2
+                      && request.auth.uid in resource.data.memberIds
+                      && !(request.auth.uid in request.resource.data.memberIds)
+                      && resource.data.memberIds.hasAll(request.resource.data.memberIds)
+                      && request.resource.data.memberIds.size() == 1
+                    )
+                  )
              )
              ||
-             (
-               resource.data.memberIds.size() == 2
+             // ---- Phase 5: timer branch ----
+             ( request.resource.data.diff(resource.data)
+                  .affectedKeys().hasOnly(['timer'])
                && request.auth.uid in resource.data.memberIds
-               && !(request.auth.uid in request.resource.data.memberIds)
-               && resource.data.memberIds.hasAll(request.resource.data.memberIds)
-               && request.resource.data.memberIds.size() == 1
+               && request.resource.data.memberIds  == resource.data.memberIds
+               && request.resource.data.ownerId    == resource.data.ownerId
+               && request.resource.data.roomCode   == resource.data.roomCode
+               && request.resource.data.createdAt  == resource.data.createdAt
+               && request.resource.data.timer is map
+               && timerValid(request.resource.data.timer, resource.data.timer)
              )
            );
 

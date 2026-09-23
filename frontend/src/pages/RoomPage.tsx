@@ -1,14 +1,36 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { leaveRoom, subscribeToRoom } from '../services/rooms'
+import {
+  completeTimerIfDue,
+  derivedRemainingMs,
+  derivedRemainingSeconds,
+  pauseTimer,
+  resetTimer,
+  resumeTimer,
+  startTimer,
+} from '../services/timer'
 import type { Room } from '../types/room'
 import { ROOM_MAX_MEMBERS } from '../types/room'
+import { DEFAULT_DURATION_SECONDS, type TimerStatus } from '../types/timer'
+import { friendlyTimerError } from '../services/timerErrors'
+import { formatClock } from '../utils/time'
+
+/** Milliseconds between local countdown re-renders (visual only). */
+const TICK_MS = 250
+
+const STATUS_LABEL: Record<TimerStatus, string> = {
+  idle: 'READY',
+  running: 'FOCUS RUNNING',
+  paused: 'PAUSED',
+  completed: 'COMPLETE',
+}
 
 /**
- * Real-time room view: shows the room code and live membership, and offers
- * Leave Room. Membership updates arrive via Firestore real-time listeners —
- * no polling. All Firestore access goes through services/rooms.ts.
+ * Real-time room view: shared timer, room code, live membership, Leave Room.
+ * Firestore is authoritative; the countdown is a local interpolation between
+ * listener snapshots. All Firestore access goes through the service layer.
  */
 export function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>()
@@ -20,11 +42,22 @@ export function RoomPage() {
   const [leaving, setLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState<string | null>(null)
 
+  // Timer UI state: derived display value + in-flight flag + friendly error.
+  const [tick, setTick] = useState(0)
+  const [busyAction, setBusyAction] = useState<
+    'start' | 'pause' | 'resume' | 'reset' | null
+  >(null)
+  const [timerError, setTimerError] = useState<string | null>(null)
+
   const uid = user?.uid ?? null
 
-  // Keep latest room in a ref for the leave flow without re-subscribing.
+  // Latest room in a ref so the completion watcher and leave flow always act
+  // on current data without re-subscribing.
   const roomRef = useRef<Room | null>(null)
   roomRef.current = room
+
+  // Completion guard: only one in-flight completion attempt per expiry.
+  const completingRef = useRef(false)
 
   useEffect(() => {
     if (!roomId || !uid) return
@@ -36,15 +69,61 @@ export function RoomPage() {
         setListenerError(null)
       },
       () => {
-        // Member-only read rejected (kicked/removed is impossible in this
-        // phase; realistically a stale or invalid id) — surface a friendly
-        // state rather than a raw Firebase error.
+        // Member-only read rejected (stale/invalid id) — friendly state.
         setListenerError('This room is no longer available.')
       },
     )
 
     return () => unsubscribe()
   }, [roomId, uid])
+
+  // Lazy completion: when the authoritative state is RUNNING at/past its end,
+  // attempt the RUNNING -> COMPLETED transition once (rules gate it on true
+  // server-side expiry). Fire-and-collect-errors; UI resyncs via listener.
+  useEffect(() => {
+    const room = roomRef.current
+    const timer = room?.timer
+    if (!roomId || !timer || completingRef.current) return
+    if (timer.status !== 'running') return
+    if (derivedRemainingMs(timer) > 0) return
+
+    completingRef.current = true
+    completeTimerIfDue(roomId)
+      .catch(() => {
+        // Rejected: another client already completed it, or the write raced.
+        // The listener delivers the winning state; nothing else to do.
+      })
+      .finally(() => {
+        completingRef.current = false
+      })
+  }, [roomId, room, tick])
+
+  // Local countdown animation — purely visual; Firestore stays authoritative.
+  useEffect(() => {
+    const timer = roomRef.current?.timer
+    if (!timer || timer.status === 'idle') return
+    const interval = window.setInterval(() => setTick((t) => t + 1), TICK_MS)
+    return () => window.clearInterval(interval)
+  }, [room?.timer?.status])
+
+  const runTimerAction = useCallback(
+    async (action: 'start' | 'pause' | 'resume' | 'reset') => {
+      if (!roomId || busyAction) return
+      setBusyAction(action)
+      setTimerError(null)
+      try {
+        if (action === 'start') await startTimer(roomId)
+        else if (action === 'pause') await pauseTimer(roomId)
+        else if (action === 'resume') await resumeTimer(roomId)
+        else await resetTimer(roomId)
+      } catch (error) {
+        setTimerError(friendlyTimerError(error))
+      } finally {
+        setBusyAction(null)
+      }
+    },
+    [roomId, busyAction],
+  )
 
   const handleLeave = async () => {
     if (!roomId || leaving) return
@@ -96,9 +175,84 @@ export function RoomPage() {
   const members = [...room.memberIds]
   const waiting = members.length < ROOM_MAX_MEMBERS
 
+  // ---- Timer derivation (visual only; Firestore is authoritative) ----
+  const timer = room.timer
+  const timerReady = Boolean(timer && typeof timer?.status === 'string')
+  const remainingSeconds = timerReady ? derivedRemainingSeconds(timer) : DEFAULT_DURATION_SECONDS
+  const displayClock = formatClock(remainingSeconds)
+  const status = timerReady ? timer.status : 'idle'
+  const expired = timerReady && status === 'running' && derivedRemainingMs(timer) <= 0
+
+  const primaryAction: 'start' | 'pause' | 'resume' | null =
+    status === 'idle' ? 'start' : status === 'running' ? 'pause' : status === 'paused' ? 'resume' : null
+
+  const timerActionInFlight = busyAction !== null
+
   return (
     <section className="flex flex-1 flex-col items-center py-12">
+      {/* ---------- Shared timer ---------- */}
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+        <p className="text-center text-xs font-semibold uppercase tracking-wider text-slate-500">
+          Shared focus timer
+        </p>
+        <p className="mt-3 text-center font-mono text-5xl font-bold tracking-tight text-slate-900">
+          {timerReady ? displayClock : '--:--'}
+        </p>
+        <p className="mt-2 text-center text-xs font-semibold uppercase tracking-widest text-slate-500">
+          {timerReady ? STATUS_LABEL[status] : '—'}
+        </p>
+
+        {timerError && (
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+          >
+            {timerError}
+          </div>
+        )}
+
+        <div className="mt-6 flex gap-3">
+          {primaryAction && (
+            <button
+              type="button"
+              onClick={() => runTimerAction(primaryAction)}
+              disabled={!isMember || timerActionInFlight}
+              className="flex-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {primaryAction === 'start'
+                ? timerActionInFlight && busyAction === 'start'
+                  ? 'Starting…'
+                  : 'Start'
+                : primaryAction === 'pause'
+                  ? timerActionInFlight && busyAction === 'pause'
+                    ? 'Pausing…'
+                    : 'Pause'
+                  : timerActionInFlight && busyAction === 'resume'
+                    ? 'Resuming…'
+                    : 'Resume'}
+            </button>
+          )}
+          {status !== 'idle' && (
+            <button
+              type="button"
+              onClick={() => runTimerAction('reset')}
+              disabled={!isMember || timerActionInFlight}
+              className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {timerActionInFlight && busyAction === 'reset' ? 'Resetting…' : 'Reset'}
+            </button>
+          )}
+        </div>
+
+        {expired && (
+          <p className="mt-3 text-center text-xs text-slate-400">
+            Finalizing session…
+          </p>
+        )}
+      </div>
+
+      {/* ---------- Room code + members ---------- */}
+      <div className="mt-8 w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-center text-xs font-semibold uppercase tracking-wider text-slate-500">
           Room code
         </p>
