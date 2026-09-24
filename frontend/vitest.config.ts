@@ -8,7 +8,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/rules/**/*.test.ts'],
+    include: ['tests/rules/**/*.test.ts', 'tests/unit/**/*.test.ts'],
     // Test files share one emulator instance and wipe its data between tests
     // (clearFirestore), so files must not run concurrently.
     fileParallelism: false,
