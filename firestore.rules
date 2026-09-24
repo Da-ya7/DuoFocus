@@ -165,6 +165,45 @@ service cloud.firestore {
         && !existsAfter(codePath(resource.data.roomCode));
 
       // ------------------------------------------------------------------
+      // rooms/{roomId}/presence/{uid} — Real-time partner presence (Phase 7)
+      // One document per member; the document ID is the member's UID.
+      // ------------------------------------------------------------------
+      match /presence/{uid} {
+
+        // Members only — consistent with the room read rule above.
+        allow read: if signedIn()
+          && request.auth.uid in get(roomPath(roomId)).data.memberIds;
+
+        // A member may create ONLY their own presence document, with exact
+        // fields, a valid status, and a server-anchored lastSeen.
+        allow create: if signedIn()
+          && request.auth.uid in get(roomPath(roomId)).data.memberIds
+          && uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['uid', 'status', 'lastSeen'])
+          && request.resource.data.keys().hasAll(['uid', 'status', 'lastSeen'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.status in ['online', 'idle', 'offline']
+          && request.resource.data.lastSeen == request.time;
+
+        // A member may update ONLY their own presence document; the uid field
+        // is frozen both on the stored document and in the new write.
+        allow update: if signedIn()
+          && request.auth.uid in get(roomPath(roomId)).data.memberIds
+          && uid == request.auth.uid
+          && resource.data.uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['uid', 'status', 'lastSeen'])
+          && request.resource.data.keys().hasAll(['uid', 'status', 'lastSeen'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.status in ['online', 'idle', 'offline']
+          && request.resource.data.lastSeen == request.time;
+
+        // No legitimate client use yet; lifecycle cleanup is deferred to the
+        // presence-lifecycle phase (room deletion already cascades implicitly:
+        // subcollection docs become unreachable once the room doc is gone).
+        allow delete: if false;
+      }
+
+      // ------------------------------------------------------------------
       // rooms/{roomId}/completions/{completionId} — Immutable completion evidence
       // ------------------------------------------------------------------
       match /completions/{completionId} {
