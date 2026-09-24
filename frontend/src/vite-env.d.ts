@@ -21,6 +21,11 @@ interface ImportMetaEnv {
 
   /** Firebase App ID */
   readonly VITE_FIREBASE_APP_ID?: string
+
+  /** Set to 'true' ONLY in the test environment to connect to the local
+   * Firebase emulators (auth :9099, firestore :8080). Never set this in a
+   * development or production environment. See frontend/.env.test.example. */
+  readonly VITE_USE_FIREBASE_EMULATORS?: string
 }
 
 interface ImportMeta {
