@@ -9,12 +9,13 @@ __pycache__/
 !.env.example
 
 # Node
-frontend/node_modules/
+node_modules/
 frontend/dist/
 
 # Firebase Emulator artifacts (never commit local emulator state)
 firebase-export/
 *-debug.log
+emulator.log
 *.pid
 
 # IDE
