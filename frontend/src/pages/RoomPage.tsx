@@ -16,6 +16,7 @@ import { ROOM_MAX_MEMBERS } from '../types/room'
 import { DEFAULT_DURATION_SECONDS, type TimerStatus } from '../types/timer'
 import { friendlyTimerError } from '../services/timerErrors'
 import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
+import type { PresenceStatus } from '../types/presence'
 import { formatClock } from '../utils/time'
 
 /** Milliseconds between local countdown re-renders (visual only). */
@@ -23,6 +24,12 @@ const TICK_MS = 250
 
 /** Milliseconds between presence heartbeat writes (Phase 7.4). */
 const HEARTBEAT_INTERVAL_MS = 30_000
+
+/** Milliseconds of inactivity before local presence state goes idle (Phase 7.5). */
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000
+
+/** Window-level activity events that refresh local presence activity. */
+const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'touchstart'] as const
 
 const STATUS_LABEL: Record<TimerStatus, string> = {
   idle: 'READY',
@@ -81,17 +88,29 @@ export function RoomPage() {
     return () => unsubscribe()
   }, [roomId, uid])
 
-  // ---- Phase 7.4: presence lifecycle (subscription + heartbeat + offline) ----
+  // ---- Phase 7.4/7.5: presence lifecycle (subscription + heartbeat + local
+  // idle detection) ----
   // Single effect keyed by room + authenticated user identity, so a room or
   // auth change fully tears down the previous lifecycle first. Everything it
-  // creates (listener, interval) is cleaned up here; no other effect or
-  // render path ever writes presence. The stored `status` stays authoritative
-  // — idle detection is intentionally out of scope until Phase 7.5.
+  // creates (activity listeners, interval, subscription) is cleaned up here;
+  // no other effect or render path ever writes presence. Activity is LOCAL
+  // ONLY: Firestore is written on status CHANGES (online <-> idle) and on the
+  // 30 s heartbeat — never per activity event. Idle/stale rendering is a
+  // later phase; the stored `status` remains the service-level truth.
   useEffect(() => {
     if (!roomId || !uid) return
 
     let active = true // guards async init against unmount/room-change races
     let heartbeat: number | null = null
+
+    // Local-only lifecycle values (no React state, nothing rendered):
+    //   lastActivity   — refreshed by window activity events
+    //   presenceStatus — locally derived state ('online' when the room opens)
+    // Effect-scoped closures keep handlers/interval free of stale values
+    // without re-subscribing or re-rendering on activity.
+    const lastActivity = { value: Date.now() }
+    let presenceStatus: PresenceStatus = 'online'
+    const isUserActive = () => Date.now() - lastActivity.value < IDLE_TIMEOUT_MS
 
     // 1. Presence subscription (real-time listener; no UI in this phase).
     const unsubscribe = subscribeToRoomPresence(
@@ -106,14 +125,34 @@ export function RoomPage() {
       },
     )
 
-    // 2. Initial online write; heartbeat starts only after it succeeds.
+    // 2. Activity tracking (window-level; never mousemove/scroll).
+    //    Online + activity: local timestamp only — NO Firestore write.
+    //    Idle + activity: ONE transition write back to online.
+    const markActivity = () => {
+      lastActivity.value = Date.now()
+      if (!active || presenceStatus !== 'idle') return
+      presenceStatus = 'online' // optimistic; a failed write self-heals on
+      // the next heartbeat tick, which re-derives the true state.
+      setOwnPresence(roomId, 'online').catch((error) => {
+        console.warn('[presence] wake write failed:', error)
+      })
+    }
+    for (const event of ACTIVITY_EVENTS) {
+      window.addEventListener(event, markActivity, { passive: true })
+    }
+
+    // 3. Initial online write; heartbeat starts only after it succeeds.
     setOwnPresence(roomId, 'online')
       .then(() => {
         if (!active) return
         heartbeat = window.setInterval(() => {
-          // Best-effort: a transient heartbeat failure (network blip) must
-          // not crash the room; the next tick retries naturally.
-          setOwnPresence(roomId, 'online').catch((error) => {
+          // Coordinated heartbeat + idle evaluation (ONE interval, no extra
+          // timers): derive the current state from local activity, then write
+          // it. Writing the SAME state is the heartbeat (lastSeen stays fresh
+          // even while idle); a CHANGED state is a one-time transition write.
+          const nextStatus: PresenceStatus = isUserActive() ? 'online' : 'idle'
+          presenceStatus = nextStatus
+          setOwnPresence(roomId, nextStatus).catch((error) => {
             console.warn('[presence] heartbeat error:', error)
           })
         }, HEARTBEAT_INTERVAL_MS)
@@ -124,12 +163,16 @@ export function RoomPage() {
         console.warn('[presence] initialization failed:', error)
       })
 
-    // 3. Cleanup: stop writing, stop listening, then best-effort offline.
-    //    The offline write is fire-and-forget so React cleanup never blocks
-    //    navigation/unmount — and it is not guaranteed anyway (crash, close,
-    //    network loss): stale-presence handling remains the fallback.
+    // 4. Cleanup: remove activity listeners, stop writing, stop listening,
+    //    then best-effort offline. The offline write is fire-and-forget so
+    //    React cleanup never blocks navigation/unmount — and it is not
+    //    guaranteed anyway (crash, close, network loss): stale-presence
+    //    handling remains the fallback.
     return () => {
       active = false
+      for (const event of ACTIVITY_EVENTS) {
+        window.removeEventListener(event, markActivity)
+      }
       if (heartbeat !== null) window.clearInterval(heartbeat)
       unsubscribe()
       setOwnPresence(roomId, 'offline').catch(() => {
