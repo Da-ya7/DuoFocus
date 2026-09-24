@@ -16,7 +16,8 @@ import { ROOM_MAX_MEMBERS } from '../types/room'
 import { DEFAULT_DURATION_SECONDS, type TimerStatus } from '../types/timer'
 import { friendlyTimerError } from '../services/timerErrors'
 import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
-import type { PresenceStatus } from '../types/presence'
+import type { PresenceStatus, RoomPresence } from '../types/presence'
+import { PartnerPresence } from '../components/room/PartnerPresence'
 import { formatClock } from '../utils/time'
 
 /** Milliseconds between local countdown re-renders (visual only). */
@@ -52,6 +53,7 @@ export function RoomPage() {
   const [listenerError, setListenerError] = useState<string | null>(null)
   const [leaving, setLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState<string | null>(null)
+  const [presenceList, setPresenceList] = useState<RoomPresence[]>([])
 
   // Timer UI state: derived display value + in-flight flag + friendly error.
   const [tick, setTick] = useState(0)
@@ -88,8 +90,8 @@ export function RoomPage() {
     return () => unsubscribe()
   }, [roomId, uid])
 
-  // ---- Phase 7.4/7.5: presence lifecycle (subscription + heartbeat + local
-  // idle detection) ----
+  // ---- Phase 7.4/7.5/7.6: presence lifecycle (subscription + heartbeat + local
+  // idle detection + UI state) ----
   // Single effect keyed by room + authenticated user identity, so a room or
   // auth change fully tears down the previous lifecycle first. Everything it
   // creates (activity listeners, interval, subscription) is cleaned up here;
@@ -112,11 +114,13 @@ export function RoomPage() {
     let presenceStatus: PresenceStatus = 'online'
     const isUserActive = () => Date.now() - lastActivity.value < IDLE_TIMEOUT_MS
 
-    // 1. Presence subscription (real-time listener; no UI in this phase).
+    // 1. Presence subscription (real-time listener; updates presenceList state).
     const unsubscribe = subscribeToRoomPresence(
       roomId,
-      () => {
-        // Intentionally unused for now — presence rendering is a later phase.
+      (presence) => {
+        if (active) {
+          setPresenceList(presence)
+        }
       },
       (error) => {
         // Non-fatal: presence must never make the room unusable, so failures
@@ -279,6 +283,11 @@ export function RoomPage() {
   const members = [...room.memberIds]
   const waiting = members.length < ROOM_MAX_MEMBERS
 
+  // ---- Partner presence derivation (Phase 7.6) ----
+  const partnerUid = room.memberIds.find((id) => id !== uid) ?? null
+  const partnerPresence = partnerUid ? presenceList.find((p) => p.uid === partnerUid) : null
+  const partnerStatus = partnerPresence ? partnerPresence.status : null
+
   // ---- Timer derivation (visual only; Firestore is authoritative) ----
   const timer = room.timer
   const timerReady = Boolean(timer && typeof timer?.status === 'string')
@@ -377,9 +386,14 @@ export function RoomPage() {
                 key={memberUid}
                 className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
               >
-                <span className="text-sm font-medium text-slate-800">
-                  {memberUid === uid ? 'You' : 'Friend'}
-                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-slate-800">
+                    {memberUid === uid ? 'You' : 'Friend'}
+                  </span>
+                  {memberUid !== uid && (
+                    <PartnerPresence status={partnerStatus} />
+                  )}
+                </div>
                 {memberUid === room.ownerId && (
                   <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                     Host
