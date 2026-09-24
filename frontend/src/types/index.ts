@@ -14,4 +14,5 @@ export class ApiError extends Error {
 }
 
 export * from './session'
+export * from './presence'
 
