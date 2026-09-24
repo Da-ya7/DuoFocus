@@ -15,10 +15,14 @@ import type { Room } from '../types/room'
 import { ROOM_MAX_MEMBERS } from '../types/room'
 import { DEFAULT_DURATION_SECONDS, type TimerStatus } from '../types/timer'
 import { friendlyTimerError } from '../services/timerErrors'
+import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
 import { formatClock } from '../utils/time'
 
 /** Milliseconds between local countdown re-renders (visual only). */
 const TICK_MS = 250
+
+/** Milliseconds between presence heartbeat writes (Phase 7.4). */
+const HEARTBEAT_INTERVAL_MS = 30_000
 
 const STATUS_LABEL: Record<TimerStatus, string> = {
   idle: 'READY',
@@ -75,6 +79,63 @@ export function RoomPage() {
     )
 
     return () => unsubscribe()
+  }, [roomId, uid])
+
+  // ---- Phase 7.4: presence lifecycle (subscription + heartbeat + offline) ----
+  // Single effect keyed by room + authenticated user identity, so a room or
+  // auth change fully tears down the previous lifecycle first. Everything it
+  // creates (listener, interval) is cleaned up here; no other effect or
+  // render path ever writes presence. The stored `status` stays authoritative
+  // — idle detection is intentionally out of scope until Phase 7.5.
+  useEffect(() => {
+    if (!roomId || !uid) return
+
+    let active = true // guards async init against unmount/room-change races
+    let heartbeat: number | null = null
+
+    // 1. Presence subscription (real-time listener; no UI in this phase).
+    const unsubscribe = subscribeToRoomPresence(
+      roomId,
+      () => {
+        // Intentionally unused for now — presence rendering is a later phase.
+      },
+      (error) => {
+        // Non-fatal: presence must never make the room unusable, so failures
+        // are logged rather than routed into the page-level listenerError.
+        console.warn('[presence] subscription error:', error)
+      },
+    )
+
+    // 2. Initial online write; heartbeat starts only after it succeeds.
+    setOwnPresence(roomId, 'online')
+      .then(() => {
+        if (!active) return
+        heartbeat = window.setInterval(() => {
+          // Best-effort: a transient heartbeat failure (network blip) must
+          // not crash the room; the next tick retries naturally.
+          setOwnPresence(roomId, 'online').catch((error) => {
+            console.warn('[presence] heartbeat error:', error)
+          })
+        }, HEARTBEAT_INTERVAL_MS)
+      })
+      .catch((error) => {
+        // Initialization failed: do not pretend the user is online and do
+        // not start a repeating interval. Room/timer keep working.
+        console.warn('[presence] initialization failed:', error)
+      })
+
+    // 3. Cleanup: stop writing, stop listening, then best-effort offline.
+    //    The offline write is fire-and-forget so React cleanup never blocks
+    //    navigation/unmount — and it is not guaranteed anyway (crash, close,
+    //    network loss): stale-presence handling remains the fallback.
+    return () => {
+      active = false
+      if (heartbeat !== null) window.clearInterval(heartbeat)
+      unsubscribe()
+      setOwnPresence(roomId, 'offline').catch(() => {
+        // Best-effort only; nothing actionable in the cleanup path.
+      })
+    }
   }, [roomId, uid])
 
   // Lazy completion: when the authoritative state is RUNNING at/past its end,
