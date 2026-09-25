@@ -217,6 +217,22 @@ export function parseRoomFromAdmin(doc: AdminDoc): PersistedRoom {
   }
 }
 
+export interface PersistedPresence {
+  uid: string
+  status: string
+  lastSeenMs: number
+}
+
+/** Parses an admin-REST rooms/{roomId}/presence/{uid} document. */
+export function parsePresenceFromAdmin(doc: AdminDoc): PersistedPresence {
+  const f = doc.fields
+  return {
+    uid: stringValue(f.uid)!,
+    status: stringValue(f.status)!,
+    lastSeenMs: timestampValueMs(f.lastSeen),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Deterministic waiting (no arbitrary sleeps)
 // ---------------------------------------------------------------------------
