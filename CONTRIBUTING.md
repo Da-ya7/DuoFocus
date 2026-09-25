@@ -5,26 +5,23 @@ Thanks for helping build DuoFocus! This is a small, private two-person project, 
 ## Getting Started
 
 1. **Clone the repository**
-2. **Backend setup**
-   ```bash
-   cd backend
-   python -m venv .venv
-   source .venv/bin/activate       # Windows: .venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-3. **Frontend setup**
+2. **Frontend setup**
    ```bash
    cd frontend
    npm install
+   ```
+3. **Firebase setup** — create a Firebase project, enable Email/Password sign-in, and fill in `frontend/.env` (see `frontend/.env.example`). Deploy the security rules from the repo root:
+   ```bash
+   firebase deploy --only firestore:rules
    ```
 4. **Verify everything runs** — see the [README](README.md#verify-the-installation).
 
 ## Ground Rules
 
-- **Never commit secrets** — no `.env` files, API keys, tokens, or credentials. Use `backend/.env.example` as the template.
-- **Never commit build artifacts** — `.venv/`, `node_modules/`, `dist/` are ignored; keep it that way.
+- **Never commit secrets** — no `.env` files, API keys, tokens, or credentials. Use `frontend/.env.example` as the template.
+- **Never commit build artifacts** — `node_modules/`, `dist/` are ignored; keep it that way.
 - **Small, focused commits** — one logical change per commit.
-- **Match the existing style** — strict TypeScript on the frontend, plain FastAPI on the backend. Don't introduce new frameworks without discussion.
+- **Match the existing style** — strict TypeScript; the backend is Firebase (Auth + Firestore + Security Rules), not a custom server. Don't introduce new frameworks without discussion.
 
 ## Commit Messages
 
@@ -37,14 +34,13 @@ docs: update setup instructions
 chore: bump vite to 5.4.21
 ```
 
-Scopes in use: `backend`, `frontend`, `api`, `ui`, `docs`, `deps`.
+Scopes in use: `frontend`, `ui`, `docs`, `deps`, `test`, `ci`.
 
 ## Workflow
 
 1. Create a branch per feature: `feat/room-creation`, `fix/health-check`, etc.
 2. Before pushing:
-   - Frontend: `npm run build` must pass (this type-checks).
-   - Backend: app must start and `/health` must return 200.
+   - `cd frontend && npm run regression` must pass (this runs all tests, typechecks, and the production build).
 3. Open a pull request with a short description of the change.
 
 ## Phase Discipline

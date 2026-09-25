@@ -48,15 +48,3 @@ if (USE_EMULATORS) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099')
   connectFirestoreEmulator(db, '127.0.0.1', 8080)
 }
-
-/**
- * Utility to retrieve the current user's Firebase ID token.
- * Used for authenticated requests to the backend (Authorization: Bearer <token>).
- */
-export async function getIdToken(forceRefresh = false): Promise<string | null> {
-  const currentUser = auth.currentUser
-  if (!currentUser) {
-    return null
-  }
-  return currentUser.getIdToken(forceRefresh)
-}

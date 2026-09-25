@@ -6,7 +6,7 @@ import {
   createUserWithEmailAndPassword,
   signOut,
 } from 'firebase/auth'
-import { auth, getIdToken } from '../services/firebase'
+import { auth } from '../services/firebase'
 
 export interface AuthContextType {
   user: User | null
@@ -14,7 +14,6 @@ export interface AuthContextType {
   login: (email: string, password: string) => Promise<void>
   register: (email: string, password: string) => Promise<void>
   logout: () => Promise<void>
-  getIdToken: (forceRefresh?: boolean) => Promise<string | null>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -50,7 +49,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     login,
     register,
     logout,
-    getIdToken,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

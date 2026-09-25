@@ -1,9 +1,6 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Base URL of the DuoFocus backend API, e.g. http://localhost:8000 (see .env.example) */
-  readonly VITE_API_BASE_URL?: string
-
   /** Firebase Web API key */
   readonly VITE_FIREBASE_API_KEY?: string
 
