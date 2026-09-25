@@ -1,0 +1,52 @@
+# DuoFocus CI — Phase 8.8
+#
+# Runs the SAME single regression command developers run locally
+# (`npm run regression`, frontend/package.json): it starts the Firebase
+# Auth + Firestore emulators on the runner, executes every Vitest suite
+# (rules, unit, service integration, multi-user), typechecks the tests and
+# the app, and runs the production build — with emulator teardown guaranteed
+# on success and failure.
+#
+# Production safety: no Firebase credentials or secrets are used. The
+# regression script pins the emulator-only dummy project (`--project
+# duofocus-test`) and the vitest config hard-wires 127.0.0.1 emulators, so
+# CI can never reach the real Firebase project. Nothing is deployed.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Node version the project is developed and verified on.
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The pinned firebase-tools@13 emulators run on the verified Java 17.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The single source of truth: emulator lifecycle + all tests +
+      # test/app typecheck + production build, with failure propagation.
+      - name: Regression
+        run: npm run regression
