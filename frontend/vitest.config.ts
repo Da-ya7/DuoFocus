@@ -5,8 +5,10 @@ import { defineConfig } from 'vitest/config'
 // Phase 8.5 — Service integration tests (REAL Firebase SDK + emulators).
 //
 // Rules tests run in Node against the local Firebase emulators (auth :9099,
-// firestore :8080) started via `npm run emulators`. This config is separate
-// from vite.config.ts so the production build config stays untouched.
+// firestore :8080) — started automatically by `npm run regression`
+// (firebase emulators:exec), or manually via `npm run emulators`. This
+// config is separate from vite.config.ts so the production build config
+// stays untouched.
 export default defineConfig({
   test: {
     environment: 'node',

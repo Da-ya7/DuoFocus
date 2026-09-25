@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "emulators": "firebase emulators:start --only auth,firestore",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify:tests": "vitest run && npm run verify:types",
+    "verify:types": "tsc -p tests/tsconfig.json",
+    "regression": "firebase emulators:exec --only auth,firestore --project duofocus-test \"npm run verify:tests && npm run build\""
   },
   "dependencies": {
     "firebase": "^12.19.0",

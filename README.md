@@ -201,6 +201,7 @@ The rules enforce: member-only room reads, join only into a one-member room by a
 | `npm run dev`     | Start dev server at `localhost:5173`     |
 | `npm run build`   | Type-check + production build to `dist/` |
 | `npm run preview` | Preview the production build locally     |
+| `npm run regression` | One-command verification: starts the Firebase **emulators**, runs all Vitest suites (rules + unit + integration + multi-user), test typecheck, and the production build; non-zero exit on any failure; emulators always shut down afterward |
 
 **Backend** (run inside `backend/` with the venv active):
 
