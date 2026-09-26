@@ -19,6 +19,7 @@ import {
   COMPLETION_ID,
   BASE_TIME,
   ROOM_CODE,
+  ACTIVITY_ID,
   clearFirestoreData,
   cleanupTestEnv,
   client,
@@ -42,6 +43,7 @@ function validCompletion(): CompletionFixture {
     durationSeconds: 1500,
     memberIds: [USER_A, USER_B],
     roomCode: ROOM_CODE,
+    activityId: ACTIVITY_ID,
   } as unknown as CompletionFixture
 }
 
@@ -51,6 +53,7 @@ function atomicCompletionBatch(
   opts: {
     withTransition?: boolean
     completion?: Partial<CompletionFixture> | null
+    omitActivityId?: boolean
     completionId?: string
     roomId?: string
   } = {},
@@ -64,7 +67,8 @@ function atomicCompletionBatch(
       { timer: { status: 'completed', remainingSeconds: 0, transitionedAt: serverTimestamp() } },
     )
   }
-  const body = { ...validCompletion(), ...(opts.completion ?? {}) }
+  const body: Record<string, unknown> = { ...validCompletion(), ...(opts.completion ?? {}) }
+  if (opts.omitActivityId) delete body.activityId
   batch.set(db.doc(`rooms/${roomId}/completions/${opts.completionId ?? COMPLETION_ID}`), body)
   return batch
 }
@@ -138,6 +142,41 @@ describe('C. Completion evidence (atomic with timer completion)', () => {
     await seedCompletion([USER_A, USER_B])
     await assertFails(
       client(USER_A).firestore().doc(`rooms/${ROOM_ID}/completions/${COMPLETION_ID}`).delete(),
+    )
+  })
+
+  it('C12: a completion carrying a DIFFERENT activityId than the room is rejected', async () => {
+    await seedRoom([USER_A, USER_B], runningTimer(BASE_TIME))
+    await assertFails(
+      atomicCompletionBatch(USER_A, { completion: { activityId: 'otherActivityZz' } }).commit(),
+    )
+    // No orphan evidence, timer unchanged.
+    const room = await client(USER_A).firestore().doc(`rooms/${ROOM_ID}`).get()
+    expect(room.data()!.timer.status).toBe('running')
+  })
+
+  it('C13: a completion MISSING activityId is rejected (exact-field shape)', async () => {
+    await seedRoom([USER_A, USER_B], runningTimer(BASE_TIME))
+    await assertFails(atomicCompletionBatch(USER_A, { omitActivityId: true }).commit())
+  })
+
+  it('C14: a completion with a non-string activityId is rejected', async () => {
+    await seedRoom([USER_A, USER_B], runningTimer(BASE_TIME))
+    await assertFails(
+      atomicCompletionBatch(USER_A, {
+        completion: { activityId: 12345 as unknown as string },
+      }).commit(),
+    )
+  })
+
+  it('C15: completion.activityId cannot be changed after creation (update forbidden)', async () => {
+    await seedRoom([USER_A, USER_B], runningTimer(BASE_TIME))
+    await seedCompletion([USER_A, USER_B])
+    await assertFails(
+      client(USER_A)
+        .firestore()
+        .doc(`rooms/${ROOM_ID}/completions/${COMPLETION_ID}`)
+        .set({ activityId: 'otherActivityZz' }, { merge: true }),
     )
   })
 

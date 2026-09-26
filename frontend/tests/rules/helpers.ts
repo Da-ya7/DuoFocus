@@ -217,14 +217,17 @@ export interface CompletionFixture {
   durationSeconds: number
   memberIds: string[]
   roomCode: string
+  /** Phase 10.6: the room's activity, bound to the evidence. */
+  activityId: string
 }
 
 export function completionFixture(
   memberIds: string[] = [USER_A, USER_B],
   completedAt: TimestampType = EXPIRY_TIME,
   roomCode: string = ROOM_CODE,
+  activityId: string = ACTIVITY_ID,
 ): CompletionFixture {
-  return { completedAt, durationSeconds: 1500, memberIds, roomCode }
+  return { completedAt, durationSeconds: 1500, memberIds, roomCode, activityId }
 }
 
 export interface SessionFixture {
@@ -233,6 +236,7 @@ export interface SessionFixture {
   completionId: string
   roomCode: string
   durationSeconds: number
+  activityId: string
   completedAt: TimestampType
   createdAt: TimestampType
 }
@@ -249,6 +253,7 @@ export function sessionFixture(
     completionId,
     roomCode: completion.roomCode,
     durationSeconds: completion.durationSeconds,
+    activityId: completion.activityId,
     completedAt: completion.completedAt,
     createdAt: BASE_TIME,
   }
@@ -282,18 +287,19 @@ export async function seedRoom(
   })
 }
 
-/** Seed a completion evidence doc. */
+/** Seed a completion evidence doc (activityId matches the room's by default). */
 export async function seedCompletion(
   members: string[] = [USER_A, USER_B],
   roomId = ROOM_ID,
   completionId = COMPLETION_ID,
   completedAt: TimestampType = EXPIRY_TIME,
   roomCode = ROOM_CODE,
+  activityId: string = activityIdFor(roomId),
 ): Promise<void> {
   await withAdmin((db) =>
     db
       .doc(`rooms/${roomId}/completions/${completionId}`)
-      .set(completionFixture(members, completedAt, roomCode)),
+      .set(completionFixture(members, completedAt, roomCode, activityId)),
   )
 }
 

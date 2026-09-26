@@ -336,15 +336,20 @@ service cloud.firestore {
                || request.auth.uid in resource.data.memberIds
              );
 
-        // ONLY allowed when atomically paired with running -> completed timer transition
+        // ONLY allowed when atomically paired with running -> completed timer
+        // transition. Phase 10.6: the evidence must carry the ROOM's activity
+        // (completion.activityId == room.activityId) — the client cannot forge
+        // a different activity; it is read server-side from the room.
         allow create: if signedIn()
           && request.auth.uid in get(roomPath(roomId)).data.memberIds
-          && request.resource.data.keys().hasOnly(['completedAt', 'durationSeconds', 'memberIds', 'roomCode'])
-          && request.resource.data.keys().hasAll(['completedAt', 'durationSeconds', 'memberIds', 'roomCode'])
+          && request.resource.data.keys().hasOnly(['completedAt', 'durationSeconds', 'memberIds', 'roomCode', 'activityId'])
+          && request.resource.data.keys().hasAll(['completedAt', 'durationSeconds', 'memberIds', 'roomCode', 'activityId'])
           && request.resource.data.completedAt == request.time
           && request.resource.data.durationSeconds == 1500
           && request.resource.data.memberIds == get(roomPath(roomId)).data.memberIds
           && request.resource.data.roomCode == get(roomPath(roomId)).data.roomCode
+          && request.resource.data.activityId is string
+          && request.resource.data.activityId == get(roomPath(roomId)).data.activityId
           && get(roomPath(roomId)).data.timer.status == 'running'
           && getAfter(roomPath(roomId)).data.timer.status == 'completed'
           && getAfter(roomPath(roomId)).data.timer.transitionedAt == request.time
@@ -360,6 +365,9 @@ service cloud.firestore {
     // ------------------------------------------------------------------
     match /users/{userId}/sessions/{sessionId} {
 
+      // The session's activityId must equal the referenced completion's
+      // activityId — which the completion rules bound to room.activityId.
+      // Phase 10.6 forbids a client-chosen activityId anywhere in the chain.
       function isLegitimateCompletedSession(data) {
         let completion = get(completionPath(data.roomId, data.completionId));
         return completion != null
@@ -367,6 +375,7 @@ service cloud.firestore {
           && data.durationSeconds == completion.data.durationSeconds
           && data.durationSeconds == 1500
           && data.roomCode == completion.data.roomCode
+          && data.activityId == completion.data.activityId
           && data.completedAt == completion.data.completedAt;
       }
 
@@ -376,16 +385,17 @@ service cloud.firestore {
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
              'userId', 'roomId', 'completionId', 'roomCode', 'durationSeconds',
-             'completedAt', 'createdAt'
+             'activityId', 'completedAt', 'createdAt'
            ])
         && request.resource.data.keys().hasAll([
              'userId', 'roomId', 'completionId', 'roomCode', 'durationSeconds',
-             'completedAt', 'createdAt'
+             'activityId', 'completedAt', 'createdAt'
            ])
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.roomId is string
         && request.resource.data.completionId is string
         && request.resource.data.roomCode is string
+        && request.resource.data.activityId is string
         && request.resource.data.durationSeconds is int
         && request.resource.data.completedAt is timestamp
         && request.resource.data.createdAt == request.time

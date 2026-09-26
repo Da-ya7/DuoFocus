@@ -23,6 +23,13 @@ export interface RoomCompletion {
   memberIds: string[]
   /** 6-character room code. */
   roomCode: string
+  /**
+   * Activity this shared study event belongs to (Phase 10.6). Copied from
+   * rooms/{roomId}.activityId at the SAME atomic commit; immutable evidence,
+   * so later activity statistics can aggregate it even after the room and
+   * its members are gone. Never an activityName snapshot.
+   */
+  activityId: string
 }
 
 /**
@@ -44,6 +51,13 @@ export interface StudySession {
   roomCode: string
   /** Focus duration in seconds completed. */
   durationSeconds: number
+  /**
+   * Activity this session studied (Phase 10.6), copied from the immutable
+   * completion evidence — never a renamed activityName. Enables per-activity
+   * personal history and derived totals. Shared time: one completion is ONE
+   * event, never multiplied by member count.
+   */
+  activityId: string
   /** Authoritative completion timestamp matching the RoomCompletion record. */
   completedAt: TimestampLike
   /** Server timestamp when this personal session document was written. */

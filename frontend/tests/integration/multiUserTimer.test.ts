@@ -73,13 +73,13 @@ afterAll(async () => {
 })
 
 /** Room A+B (B joins via the real service), both clients bootstrapped. */
-async function twoMemberRoom(): Promise<{ roomId: string; roomCode: string }> {
-  const { roomId, roomCode } = await createRoom()
+async function twoMemberRoom(): Promise<{ roomId: string; roomCode: string; activityId: string }> {
+  const { roomId, roomCode, activityId } = await createRoom()
   await signInAs(USER_B)
   await joinRoom(roomCode)
   await signInA(USER_A)
   await ensureClientB('userB')
-  return { roomId, roomCode }
+  return { roomId, roomCode, activityId }
 }
 
 /** The 1500s-ago instant used for expired fixtures. */
@@ -352,7 +352,7 @@ describe('F. two-user session materialization', () => {
 
 describe('K. controlled concurrency (single atomic-batch dependency)', () => {
   it('K1: simultaneous completion from A (service) and B (independent client) → exactly one doc', async () => {
-    const { roomId, roomCode } = await twoMemberRoom()
+    const { roomId, roomCode, activityId } = await twoMemberRoom()
     await adminSeedRoomTimer(roomId, {
       status: 'running',
       remainingSeconds: 1500,
@@ -363,7 +363,7 @@ describe('K. controlled concurrency (single atomic-batch dependency)', () => {
     const aCall = completeTimerIfDue(roomId)
     // B: the EXACT same atomic batch through B's INDEPENDENT client — a true
     // second user racing A at the same logical time.
-    const bCall = completeTimerAsB(roomId, [USER_A, USER_B], roomCode)
+    const bCall = completeTimerAsB(roomId, [USER_A, USER_B], roomCode, activityId)
 
     const results = await Promise.allSettled([aCall, bCall])
     const fulfilled = results.filter((r) => r.status === 'fulfilled')

@@ -282,6 +282,7 @@ export async function completeTimerAsB(
   roomId: string,
   memberIds: string[],
   roomCode: string,
+  activityId: string,
 ): Promise<void> {
   const db = requireDbB()
   const batch = writeBatch(db)
@@ -293,6 +294,7 @@ export async function completeTimerAsB(
     durationSeconds: 1500,
     memberIds,
     roomCode,
+    activityId,
   })
   await batch.commit()
 }

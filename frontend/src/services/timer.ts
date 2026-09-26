@@ -131,6 +131,7 @@ interface RoomSnapshotData {
   timer: TimerState
   memberIds: string[]
   roomCode: string
+  activityId: string
 }
 
 /** Reads the room document and extracts timer, membership, and code. */
@@ -151,7 +152,11 @@ async function readRoom(roomId: string): Promise<RoomSnapshotData> {
   }
   const memberIds = Array.isArray(data.memberIds) ? (data.memberIds as string[]) : []
   const roomCode = typeof data.roomCode === 'string' ? data.roomCode : ''
-  return { timer, memberIds, roomCode }
+  // Phase 10.6: completion evidence must carry the room's activity. A missing
+  // activityId is left empty so the completion rules reject the write rather
+  // than the client inventing one.
+  const activityId = typeof data.activityId === 'string' ? data.activityId : ''
+  return { timer, memberIds, roomCode, activityId }
 }
 
 /** Reads the room's current timer state (member read). */
@@ -287,6 +292,9 @@ export async function completeTimerIfDue(roomId: string): Promise<void> {
         durationSeconds: DEFAULT_DURATION_SECONDS,
         memberIds: room.memberIds,
         roomCode: room.roomCode,
+        // Phase 10.6: born with the room's activity in the SAME atomic commit
+        // (rules verify completion.activityId == room.activityId).
+        activityId: room.activityId,
       })
       await batch.commit()
     })

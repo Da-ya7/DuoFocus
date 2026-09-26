@@ -112,12 +112,15 @@ export async function recordCompletedSession(
     }
 
     // 3. Write personal session document with exact authoritative completion metadata
+    // activityId is copied from the immutable completion evidence (never a
+    // client-chosen value and never a mutable activityName snapshot).
     const sessionPayload = {
       userId: uid,
       roomId,
       completionId,
       roomCode: compData.roomCode,
       durationSeconds: compData.durationSeconds,
+      activityId: compData.activityId,
       completedAt: compData.completedAt,
       createdAt: serverTimestamp(),
     }
@@ -131,6 +134,7 @@ export async function recordCompletedSession(
       completionId,
       roomCode: compData.roomCode,
       durationSeconds: compData.durationSeconds,
+      activityId: compData.activityId,
       completedAt: compData.completedAt,
       createdAt: compData.completedAt, // Optimistic fallback until confirmed snapshot
     }
@@ -182,6 +186,7 @@ export async function syncMissedRoomCompletions(roomId: string): Promise<StudySe
         completionId,
         roomCode: data.roomCode,
         durationSeconds: data.durationSeconds,
+        activityId: data.activityId,
         completedAt: data.completedAt,
         createdAt: serverTimestamp(),
       }
@@ -195,6 +200,7 @@ export async function syncMissedRoomCompletions(roomId: string): Promise<StudySe
         completionId,
         roomCode: data.roomCode,
         durationSeconds: data.durationSeconds,
+        activityId: data.activityId,
         completedAt: data.completedAt,
         createdAt: data.completedAt,
       })
@@ -219,6 +225,7 @@ function toStudySession(docId: string, data: Record<string, unknown>): StudySess
     completionId: String(data.completionId ?? ''),
     roomCode: String(data.roomCode ?? ''),
     durationSeconds: typeof data.durationSeconds === 'number' ? data.durationSeconds : 1500,
+    activityId: String(data.activityId ?? ''),
     completedAt: (data.completedAt as TimestampLike) ?? { seconds: 0, nanoseconds: 0 },
     createdAt: (data.createdAt as TimestampLike) ?? { seconds: 0, nanoseconds: 0 },
   }

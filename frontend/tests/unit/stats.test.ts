@@ -36,6 +36,7 @@ function session(overrides: Partial<StudySession> = {}): StudySession {
     completionId: `c${seq}`,
     roomCode: '234567',
     durationSeconds: 1500,
+    activityId: 'activity1',
     completedAt: tsLocal(daysAgoAt(1)),
     createdAt: tsLocal(daysAgoAt(1)),
     ...overrides,

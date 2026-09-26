@@ -17,6 +17,7 @@ import {
   OUTSIDER,
   SESSION_ID,
   BASE_TIME,
+  ACTIVITY_ID,
   clearFirestoreData,
   cleanupTestEnv,
   client,
@@ -132,6 +133,33 @@ describe('D. Session documents', () => {
     await seedSession(USER_A)
     await assertFails(
       client(OUTSIDER).firestore().doc(`users/${USER_A}/sessions/${SESSION_ID}`).delete(),
+    )
+  })
+
+  it('D15: a valid session carries the completion\'s activityId', async () => {
+    await seedCompletion([USER_A, USER_B])
+    await assertSucceeds(sessionDoc(USER_A, SESSION_ID).set(validSession(USER_A)))
+    const snap = await sessionDoc(USER_A, SESSION_ID).get()
+    expect(snap.data()!.activityId).toBe(ACTIVITY_ID)
+  })
+
+  it('D16: a session with a DIFFERENT activityId than the completion is rejected (forged)', async () => {
+    await seedCompletion([USER_A, USER_B])
+    await assertFails(
+      sessionDoc(USER_A, SESSION_ID).set({ ...validSession(USER_A), activityId: 'otherActivityZz' }),
+    )
+  })
+
+  it('D17: a session MISSING activityId is rejected (exact-field shape)', async () => {
+    await seedCompletion([USER_A, USER_B])
+    const { activityId: _omit, ...withoutActivity } = validSession(USER_A)
+    await assertFails(sessionDoc(USER_A, SESSION_ID).set(withoutActivity))
+  })
+
+  it('D18: a session with a non-string activityId is rejected', async () => {
+    await seedCompletion([USER_A, USER_B])
+    await assertFails(
+      sessionDoc(USER_A, SESSION_ID).set({ ...validSession(USER_A), activityId: 42 as unknown as string }),
     )
   })
 })
