@@ -17,6 +17,9 @@ service cloud.firestore {
     function completionPath(roomId, compId) {
       return /databases/$(database)/documents/rooms/$(roomId)/completions/$(compId);
     }
+    function activityPath(activityId) {
+      return /databases/$(database)/documents/activities/$(activityId);
+    }
 
     // ------------------------------------------------------------------
     // roomCodes/{roomCode} — lookup only. Maps a human room code to a
@@ -31,14 +34,22 @@ service cloud.firestore {
 
       // A code may only be claimed together with the room it points to.
       // The room must NOT exist before the batch and MUST exist after it —
-      // this forbids squatter code docs pointing at pre-existing rooms.
+      // this forbids squatter code docs pointing at pre-existing rooms. The
+      // code also carries the room's activityId (Phase 10.5) so a joiner can
+      // reach both documents without a member-gated room read; it must match
+      // the new room's own activityId and reference a real activity.
       allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['roomId'])
-        && request.resource.data.keys().hasAll(['roomId'])
+        && request.resource.data.keys().hasOnly(['roomId', 'activityId'])
+        && request.resource.data.keys().hasAll(['roomId', 'activityId'])
         && request.resource.data.roomId is string
         && request.resource.data.roomId.size() > 0
+        && request.resource.data.activityId is string
+        && request.resource.data.activityId.size() > 0
         && !exists(roomPath(request.resource.data.roomId))
-        && existsAfter(roomPath(request.resource.data.roomId));
+        && existsAfter(roomPath(request.resource.data.roomId))
+        && getAfter(roomPath(request.resource.data.roomId)).data.activityId
+             == request.resource.data.activityId
+        && existsAfter(activityPath(request.resource.data.activityId));
 
       // Codes are immutable once claimed.
       allow update: if false;
@@ -190,15 +201,25 @@ service cloud.firestore {
       allow read: if signedIn()
         && request.auth.uid in resource.data.memberIds;
 
-      // A room is only created together with its roomCodes document.
+      // A room is only created together with its roomCodes document AND its
+      // activity (Phase 10.5). The activity must exist after the write, be
+      // owned by the creator, and have the creator as its sole member — so a
+      // room can never reference a missing, foreign, or already-shared
+      // activity. activityId is immutable afterwards (see the update rule).
       allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['roomCode', 'ownerId', 'memberIds', 'createdAt', 'timer'])
-        && request.resource.data.keys().hasAll(['roomCode', 'ownerId', 'memberIds', 'createdAt', 'timer'])
+        && request.resource.data.keys().hasOnly(['roomCode', 'ownerId', 'memberIds', 'createdAt', 'activityId', 'timer'])
+        && request.resource.data.keys().hasAll(['roomCode', 'ownerId', 'memberIds', 'createdAt', 'activityId', 'timer'])
         && request.resource.data.ownerId == request.auth.uid
         && request.resource.data.memberIds == [request.auth.uid]
         && request.resource.data.roomCode is string
         && request.resource.data.roomCode.matches('^[2-9A-HJ-NP-Z]{6}$')
         && request.resource.data.createdAt == request.time
+        && request.resource.data.activityId is string
+        && request.resource.data.activityId.size() > 0
+        && request.resource.data.activityId == getAfter(codePath(request.resource.data.roomCode)).data.activityId
+        && existsAfter(activityPath(request.resource.data.activityId))
+        && getAfter(activityPath(request.resource.data.activityId)).data.ownerId == request.auth.uid
+        && getAfter(activityPath(request.resource.data.activityId)).data.memberIds == [request.auth.uid]
         && request.resource.data.timer.keys().hasOnly(['status', 'remainingSeconds', 'transitionedAt'])
         && request.resource.data.timer.keys().hasAll(['status', 'remainingSeconds', 'transitionedAt'])
         && request.resource.data.timer.status == 'idle'
@@ -208,13 +229,20 @@ service cloud.firestore {
 
       // Updates may ONLY touch memberIds (join/leave shapes) OR the timer
       // (exact transition shapes). All other room fields are frozen by the
-      // affectedKeys() constraints in both branches.
+      // affectedKeys() constraints in both branches. Phase 10.5: any
+      // membership change must keep room.memberIds == activity.memberIds, so
+      // the membership branch cross-checks the ACTIVITY's post-write state
+      // with getAfter() — a room membership write not paired with the matching
+      // activity write is rejected, and vice versa.
       allow update: if signedIn()
         && (
              // ---- Phase 4: membership branch (with Phase 6 post-completion join block) ----
              ( request.resource.data.diff(resource.data)
                   .affectedKeys().hasOnly(['memberIds'])
+               && request.resource.data.activityId == resource.data.activityId
                && request.resource.data.memberIds is list
+               && getAfter(activityPath(resource.data.activityId)).data.memberIds
+                    == request.resource.data.memberIds
                && (
                     (
                       resource.data.memberIds.size() == 1
@@ -243,17 +271,21 @@ service cloud.firestore {
                && request.resource.data.ownerId    == resource.data.ownerId
                && request.resource.data.roomCode   == resource.data.roomCode
                && request.resource.data.createdAt  == resource.data.createdAt
+               && request.resource.data.activityId == resource.data.activityId
                && request.resource.data.timer is map
                && timerValid(request.resource.data.timer, resource.data.timer)
              )
            );
 
       // A room may only be deleted as the paired half of a final-member
-      // leave: the caller must be the sole current member, and the
-      // roomCodes document must be deleted in the SAME batched write.
+      // leave: the caller must be the sole current member, the roomCodes
+      // document must be deleted in the SAME batched write, and (Phase 10.5)
+      // the activity must be emptied to [] in that same write. The activity
+      // document itself always remains — only its membership empties.
       allow delete: if signedIn()
         && resource.data.memberIds == [request.auth.uid]
-        && !existsAfter(codePath(resource.data.roomCode));
+        && !existsAfter(codePath(resource.data.roomCode))
+        && getAfter(activityPath(resource.data.activityId)).data.memberIds == [];
 
       // ------------------------------------------------------------------
       // rooms/{roomId}/presence/{uid} — Real-time partner presence (Phase 7)

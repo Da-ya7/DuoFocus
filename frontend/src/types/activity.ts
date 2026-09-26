@@ -110,3 +110,19 @@ export interface ActivityCompletionRecord {
   /** Server-anchored completion moment. */
   completedAt: TimestampLike
 }
+
+/** Typed error thrown by the activity service layer (Phase 10.4). */
+export class ActivityError extends Error {
+  readonly code:
+    | 'unauthenticated' // no authenticated user for a required-auth operation
+    | 'permission-denied' // rejected by Firestore security rules
+    | 'not-found' // requested activity does not exist
+    | 'invalid-input' // client-side contract failure (e.g. name validation)
+    | 'unknown' // network/unexpected failure
+
+  constructor(code: ActivityError['code'], message: string) {
+    super(message)
+    this.name = 'ActivityError'
+    this.code = code
+  }
+}

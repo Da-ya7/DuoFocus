@@ -23,6 +23,8 @@ import {
   seedSession,
   seedPresence,
   runningTimer,
+  joinRoomBatch,
+  leaveRoomBatch,
   serverTimestamp,
 } from './helpers'
 
@@ -117,8 +119,9 @@ describe('G. Cross-cutting authorization & field validation', () => {
     await seedRoom([USER_A, USER_B])
     await seedCompletion([USER_A, USER_B])
     // B leaves; C joins — C is now a current member but was not at completion.
-    await client(USER_B).firestore().doc(`rooms/${ROOM_ID}`).set({ memberIds: [USER_A] }, { merge: true })
-    await client(USER_C).firestore().doc(`rooms/${ROOM_ID}`).set({ memberIds: [USER_A, USER_C] }, { merge: true })
+    // (Phase 10.5: membership changes are atomic across room + activity.)
+    await leaveRoomBatch(USER_B).commit()
+    await joinRoomBatch(USER_C, USER_A).commit()
     // C may READ the completion (current member) ...
     await assertSucceeds(client(USER_C).firestore().doc(`rooms/${ROOM_ID}/completions/${COMPLETION_ID}`).get())
     // ... but may NOT log a session against it.

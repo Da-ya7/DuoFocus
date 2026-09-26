@@ -94,7 +94,7 @@ describe('A. two-user room membership', () => {
   })
 
   it('A3: A subscribes FIRST; B joins; A\u2019s realtime listener observes B\u2019s membership', async () => {
-    const { roomId, roomCode } = await createRoom()
+    const { roomId, roomCode, activityId } = await createRoom()
     await ensureClientB('userB')
 
     // A subscribes BEFORE B joins (real service listener on the shared app).
@@ -103,7 +103,7 @@ describe('A. two-user room membership', () => {
     try {
       // B joins from its INDEPENDENT client (service-identical real-SDK
       // write) — the shared auth is not churned while the listener is live.
-      await joinRoomAsB(roomId)
+      await joinRoomAsB(roomId, activityId)
 
       await waitForRoomMembership(aUpdatesCap(aUpdates), [USER_A, USER_B], 'A observes B joining')
       const final = aUpdates[aUpdates.length - 1]!
@@ -150,7 +150,7 @@ describe('A. two-user room membership', () => {
 describe('B. realtime room convergence', () => {
   it('B1–B4: A subscribes pre-join, B subscribes post-join — both converge to [A, B]', async () => {
     // B1: A creates room.
-    const { roomId, roomCode } = await createRoom()
+    const { roomId, roomCode, activityId } = await createRoom()
     await ensureClientB('userB')
 
     // A's listener (real service) attaches BEFORE the join and must observe
@@ -159,7 +159,7 @@ describe('B. realtime room convergence', () => {
     const unsubA = subscribeToRoom(roomId, (room) => aUpdates.push(room))
     try {
       // B2: B joins from its INDEPENDENT client (real-SDK, service-identical).
-      await joinRoomAsB(roomId)
+      await joinRoomAsB(roomId, activityId)
 
       // B3: A's listener observes the membership change (eventual, not ordered).
       await waitForRoomMembership(aUpdatesCap(aUpdates), [USER_A, USER_B], 'A converges')
@@ -192,11 +192,11 @@ describe('B. realtime room convergence', () => {
     // user becomes a member; the app's own subscribeToRoom is always called
     // with an established membership (room page loads after join), so this
     // is a documented edge, not a production defect.
-    const { roomId } = await createRoom()
+    const { roomId, activityId } = await createRoom()
     await ensureClientB('userB')
     const { cap, errors, unsubscribe } = listenRoomAsB(roomId)
     try {
-      await joinRoomAsB(roomId)
+      await joinRoomAsB(roomId, activityId)
       // The listener errors (bounded wait) and never yields the room.
       await waitFor(() => (errors.length > 0 ? true : undefined), {
         label: 'pre-membership listener to be rejected',

@@ -60,13 +60,13 @@ afterAll(async () => {
 })
 
 /** Room A+B, both clients bootstrapped. */
-async function twoMemberRoom(): Promise<{ roomId: string; roomCode: string }> {
-  const { roomId, roomCode } = await createRoom()
+async function twoMemberRoom(): Promise<{ roomId: string; roomCode: string; activityId: string }> {
+  const { roomId, roomCode, activityId } = await createRoom()
   await signInAs(USER_B)
   await joinRoom(roomCode)
   await signInA(USER_A)
   await ensureClientB('userB')
-  return { roomId, roomCode }
+  return { roomId, roomCode, activityId }
 }
 
 describe('H. two-user presence', () => {
@@ -269,7 +269,7 @@ describe('I. presence realtime convergence (A writes \u2192 B observes each tran
 
 describe('J. room leave + presence lifecycle', () => {
   it('J1–J5: B leaves; A\u2019s room listener updates; B\u2019s membership state is gone', async () => {
-    const { roomId } = await twoMemberRoom()
+    const { roomId, activityId } = await twoMemberRoom()
     await setOwnPresence(roomId, 'online')
     await setPresenceAsB(roomId, 'online') // J2: both have presence docs
 
@@ -277,8 +277,9 @@ describe('J. room leave + presence lifecycle', () => {
     const aUpdates: import('../../src/types/room').Room[] = []
     const unsubA = subscribeToRoom(roomId, (room) => aUpdates.push(room))
     try {
-      // J3: B leaves via its independent client (service-identical shape).
-      await leaveRoomAsB(roomId)
+      // J3: B leaves via its independent client (service-identical shape;
+      // atomic across room + activity).
+      await leaveRoomAsB(roomId, activityId)
 
       // J4: A's realtime membership updates to [userA] only.
       await waitFor(
@@ -302,9 +303,9 @@ describe('J. room leave + presence lifecycle', () => {
     // delete: if false). After a leave, the stale presence doc therefore
     // remains under rooms/{roomId}/presence/{uid} with its last status.
     // (Reports as a known design characteristic, not patched.)
-    const { roomId } = await twoMemberRoom()
+    const { roomId, activityId } = await twoMemberRoom()
     await setPresenceAsB(roomId, 'online') // B was present
-    await leaveRoomAsB(roomId) // B leaves
+    await leaveRoomAsB(roomId, activityId) // B leaves
 
     // Nothing deleted B's presence document:
     const docs = await listPresence(roomId)

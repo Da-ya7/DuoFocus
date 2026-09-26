@@ -10,7 +10,6 @@ import {
   query,
   runTransaction,
   serverTimestamp,
-  updateDoc,
   where,
   writeBatch,
   type Unsubscribe,
@@ -22,10 +21,11 @@ import {
   RoomError,
   type Room,
 } from '../types/room'
+import { ACTIVITY_NAME_MAX_LENGTH, validateActivityName } from '../types/activity'
 import { DEFAULT_DURATION_SECONDS } from '../types/timer'
 
 /**
- * Room service — Phase 4.
+ * Room service — Phase 4 (activity integration in Phase 10.5).
  *
  * All Firestore access for rooms lives here; page components never touch the
  * SDK directly. Every write is either a single atomic document operation or a
@@ -33,13 +33,24 @@ import { DEFAULT_DURATION_SECONDS } from '../types/timer'
  * server-side at commit time. The authenticated Firebase user is always the
  * acting identity — no client-supplied UIDs are ever trusted.
  *
+ * Phase 10.5 invariant: a room references exactly one persistent activity,
+ * and `room.memberIds == activity.memberIds` at every committed state. Room
+ * creation writes the activity, the room, and its code together; join/leave
+ * mutate BOTH membership lists in one atomic batch, so no successful room
+ * operation can leave the two lists out of sync.
+ *
  * Collections:
- *   roomCodes/{roomCode} → { roomId }        (lookup only, no membership data)
+ *   roomCodes/{roomCode} → { roomId, activityId }  (lookup only)
  *   rooms/{roomId}       → Room document
+ *   activities/{id}      → Activity document
  */
 
 const ROOMS = 'rooms'
 const ROOM_CODES = 'roomCodes'
+const ACTIVITIES = 'activities'
+
+/** Default activity name for topicless rooms (never global; per-room). */
+export const DEFAULT_ACTIVITY_NAME = 'Random Topic'
 
 /** Maximum attempts to reserve a unique room code before giving up. */
 const CODE_RESERVE_MAX_ATTEMPTS = 5
@@ -93,15 +104,35 @@ function toRoomError(error: unknown): never {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a room owned by the current user and atomically reserves a unique
- * room code for it.
+ * Creates a room owned by the current user, together with its Activity, in
+ * ONE transaction that also claims a unique room code.
  *
- * One transaction claims roomCodes/{code} and creates rooms/{roomId} together;
- * on a code collision the transaction re-runs with a freshly generated code.
- * Rules additionally require the two documents to reference each other.
+ * The activity, the room, and the code document are written atomically: rules
+ * require the room to reference a real activity whose members match the
+ * room's, and that the code points at both. On a code collision the
+ * transaction re-runs with a freshly generated code. A topicless room gets
+ * its own activity named "Random Topic" — never a shared one.
  */
-export async function createRoom(): Promise<{ roomId: string; roomCode: string }> {
+export async function createRoom(
+  topic?: string,
+): Promise<{ roomId: string; roomCode: string; activityId: string }> {
   const uid = requireUid()
+
+  // Validate BEFORE any write: an invalid topic must never leave partial
+  // Firestore data behind. Reuse the shared activity-name contract.
+  let activityName: string
+  if (topic === undefined) {
+    activityName = DEFAULT_ACTIVITY_NAME
+  } else {
+    const trimmed = validateActivityName(topic)
+    if (trimmed === null) {
+      throw new RoomError(
+        'invalid-input',
+        `Topic must be 1-${ACTIVITY_NAME_MAX_LENGTH} characters and cannot be blank.`,
+      )
+    }
+    activityName = trimmed
+  }
 
   return runTransaction(db, async (tx) => {
     // Fresh codes inside the transaction: on a stale-snapshot retry (another
@@ -111,18 +142,30 @@ export async function createRoom(): Promise<{ roomId: string; roomCode: string }
       const code = generateRoomCode()
       const codeRef = doc(db, ROOM_CODES, code)
       const roomRef = doc(collection(db, ROOMS))
+      const activityRef = doc(collection(db, ACTIVITIES))
 
       const existing = await tx.get(codeRef)
       if (existing.exists()) {
         continue // collision — try another code
       }
 
-      tx.set(codeRef, { roomId: roomRef.id })
+      // Activity first (rules: the room's activity must exist after the write
+      // with the creator as its sole member and owner).
+      tx.set(activityRef, {
+        ownerId: uid,
+        memberIds: [uid],
+        name: activityName,
+        createdAt: serverTimestamp(),
+      })
+      // Code points at BOTH documents so a joiner can resolve the activity
+      // without a member-gated room read.
+      tx.set(codeRef, { roomId: roomRef.id, activityId: activityRef.id })
       tx.set(roomRef, {
         roomCode: code,
         ownerId: uid,
         memberIds: [uid],
         createdAt: serverTimestamp(),
+        activityId: activityRef.id,
         timer: {
           status: 'idle',
           remainingSeconds: DEFAULT_DURATION_SECONDS,
@@ -130,7 +173,7 @@ export async function createRoom(): Promise<{ roomId: string; roomCode: string }
         },
       })
 
-      return { roomId: roomRef.id, roomCode: code }
+      return { roomId: roomRef.id, roomCode: code, activityId: activityRef.id }
     }
 
     // ~1.1e9 code space — running out 5 times is astronomically unlikely.
@@ -145,11 +188,13 @@ export async function createRoom(): Promise<{ roomId: string; roomCode: string }
 /**
  * Joins the room behind a room code as the current user.
  *
- * The lookup read is limited to roomCodes/{code} (roomId only, no membership
- * data). The membership change itself is a single atomic, read-free update:
- * security rules validate it at commit time against the live document, so
- * concurrent joins serialize — the second commit sees a full room and is
- * rejected. Final member count can never exceed 2.
+ * The lookup read is limited to roomCodes/{code} (roomId + activityId only,
+ * no membership data — the joiner is not yet a member and cannot read the
+ * member-gated room document). The membership change is ONE atomic batch that
+ * adds the caller to BOTH the room and its activity; rules validate each
+ * commit against the live documents (and cross-check the two via getAfter),
+ * so concurrent joins serialize — the second commit sees a full room/activity
+ * and is rejected. Neither list can ever exceed 2, and they can never drift.
  */
 export async function joinRoom(rawCode: string): Promise<void> {
   const uid = requireUid()
@@ -160,13 +205,21 @@ export async function joinRoom(rawCode: string): Promise<void> {
   }
 
   let roomId: string
+  let activityId: string
   try {
     const codeSnap = await getDoc(doc(db, ROOM_CODES, code))
     if (!codeSnap.exists()) {
       throw new RoomError('not-found', 'Room not found.')
     }
-    roomId = codeSnap.data().roomId as string
-    if (typeof roomId !== 'string' || roomId.length === 0) {
+    const codeData = codeSnap.data()
+    roomId = codeData.roomId as string
+    activityId = codeData.activityId as string
+    if (
+      typeof roomId !== 'string' ||
+      roomId.length === 0 ||
+      typeof activityId !== 'string' ||
+      activityId.length === 0
+    ) {
       throw new RoomError('not-found', 'Room not found.')
     }
   } catch (error) {
@@ -175,10 +228,15 @@ export async function joinRoom(rawCode: string): Promise<void> {
   }
 
   const roomRef = doc(db, ROOMS, roomId)
+  const activityRef = doc(db, ACTIVITIES, activityId)
 
   try {
-    // Atomic add-own-uid; rules permit only the exact 1 -> 2 shape.
-    await updateDoc(roomRef, { memberIds: arrayUnion(uid) })
+    // One atomic batch: room and activity gain the SAME new member, so a
+    // committed join can never leave the two lists out of sync.
+    const batch = writeBatch(db)
+    batch.update(roomRef, { memberIds: arrayUnion(uid) })
+    batch.update(activityRef, { memberIds: arrayUnion(uid) })
+    await batch.commit()
   } catch (error) {
     // Classify the rejection without needing broad read access:
     //  - member?          -> already in the room
@@ -209,15 +267,39 @@ export async function joinRoom(rawCode: string): Promise<void> {
 /**
  * Leaves the room as the current user.
  *
- *  - Two members: atomic arrayRemove of own UID (rules LEAVE shape).
- *  - Sole member: one batched write deletes the room AND its roomCodes
- *    document together — rules require the pairing (getAfter/existsAfter),
- *    so orphaned codes are impossible.
+ *  - Two members: ONE atomic batch removes own UID from BOTH the room and its
+ *    activity (rules LEAVE shapes; the room rule cross-checks the activity
+ *    with getAfter so the two can never drift).
+ *  - Sole member: ONE atomic batch deletes the room AND its roomCodes
+ *    document (rules require the pairing) AND empties the activity's
+ *    membership — the activity document itself always remains, preserving
+ *    its history.
  *  - Room already gone: idempotent success.
  */
 export async function leaveRoom(roomId: string): Promise<void> {
   const uid = requireUid()
   const roomRef = doc(db, ROOMS, roomId)
+
+  /** Commits the atomic leave for the given room snapshot data. */
+  const commitLeave = async (data: {
+    memberIds: string[]
+    roomCode: string
+    activityId: string
+  }): Promise<void> => {
+    const activityRef = doc(db, ACTIVITIES, data.activityId)
+    const batch = writeBatch(db)
+    if (data.memberIds.length === 1) {
+      // Sole member: delete room + code and empty the activity — atomically.
+      batch.delete(roomRef)
+      batch.delete(doc(db, ROOM_CODES, data.roomCode))
+      batch.update(activityRef, { memberIds: arrayRemove(uid) })
+    } else {
+      // Two members: remove only own UID from room and activity together.
+      batch.update(roomRef, { memberIds: arrayRemove(uid) })
+      batch.update(activityRef, { memberIds: arrayRemove(uid) })
+    }
+    await batch.commit()
+  }
 
   try {
     const roomSnap = await getDoc(roomRef)
@@ -228,19 +310,11 @@ export async function leaveRoom(roomId: string): Promise<void> {
     }
 
     const data = roomSnap.data()
-    const members = data.memberIds as string[]
-
-    if (members.length === 1) {
-      // Sole member: delete room + code mapping in ONE atomic batch.
-      const batch = writeBatch(db)
-      batch.delete(roomRef)
-      batch.delete(doc(db, ROOM_CODES, data.roomCode as string))
-      await batch.commit()
-      return
-    }
-
-    // Two members: remove only own UID (atomic; rules restrict the shape).
-    await updateDoc(roomRef, { memberIds: arrayRemove(uid) })
+    await commitLeave({
+      memberIds: data.memberIds as string[],
+      roomCode: data.roomCode as string,
+      activityId: data.activityId as string,
+    })
   } catch (error) {
     // Both members leaving concurrently: the first commit wins, the second
     // hits the rules' 2 -> 1 shape from a now-stale document. Re-decide once
@@ -250,18 +324,16 @@ export async function leaveRoom(roomId: string): Promise<void> {
       if (!fresh.exists()) {
         return // room deleted by the other member — success
       }
-      const freshMembers = fresh.data().memberIds as string[]
+      const freshData = fresh.data()
+      const freshMembers = freshData.memberIds as string[]
       if (!freshMembers.includes(uid)) {
         return // our removal actually landed — success
       }
-      if (freshMembers.length === 1) {
-        const batch = writeBatch(db)
-        batch.delete(roomRef)
-        batch.delete(doc(db, ROOM_CODES, fresh.data().roomCode as string))
-        await batch.commit()
-        return
-      }
-      await updateDoc(roomRef, { memberIds: arrayRemove(uid) })
+      await commitLeave({
+        memberIds: freshMembers,
+        roomCode: freshData.roomCode as string,
+        activityId: freshData.activityId as string,
+      })
       return
     } catch {
       toRoomError(error)

@@ -3,8 +3,12 @@
  *
  * Firestore model:
  *
- *   roomCodes/{roomCode} → { roomId: string }          (code → room lookup only)
+ *   roomCodes/{roomCode} → { roomId, activityId }      (code → room lookup only)
  *   rooms/{roomId}       → Room (below)
+ *
+ * Phase 10.5: every room references exactly one persistent Activity
+ * (activities/{activityId}); the two membership lists are kept identical by
+ * atomic writes, enforced server-side in firestore.rules.
  */
 
 import type { TimerState, TimestampLike } from './timer'
@@ -27,6 +31,11 @@ export interface Room {
   memberIds: string[]
   /** Server timestamp of creation. */
   createdAt: TimestampLike
+  /**
+   * Activity this room studies (Phase 10.5). Immutable after creation; the
+   * room's memberIds always equal the activity's memberIds.
+   */
+  activityId: string
   /** Room-level shared study timer (Phase 5; born idle). */
   timer: TimerState
 }
@@ -38,6 +47,7 @@ export class RoomError extends Error {
     | 'room-full' // room already has two members
     | 'already-member' // caller is already a member of the room
     | 'taken' // caller already occupies an active room
+    | 'invalid-input' // client-side contract failure (e.g. topic validation)
     | 'permission-denied' // rejected by Firestore security rules
     | 'unknown'
 

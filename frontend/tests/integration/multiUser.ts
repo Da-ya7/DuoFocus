@@ -298,25 +298,33 @@ export async function completeTimerAsB(
 }
 
 /**
- * B-side JOIN with the exact service write shape
- * (updateDoc + arrayUnion(uid) — identical to joinRoom's mutation), executed
- * through client B's INDEPENDENT SDK so that live listeners on the shared
- * app are never disturbed by identity churn. Real SDK, real rules.
+ * B-side JOIN with the exact service write shape (ONE atomic batch adding the
+ * caller to BOTH the room and its activity — identical to joinRoom's mutation),
+ * executed through client B's INDEPENDENT SDK so that live listeners on the
+ * shared app are never disturbed by identity churn. Real SDK, real rules.
  */
-export async function joinRoomAsB(roomId: string): Promise<void> {
+export async function joinRoomAsB(roomId: string, activityId: string): Promise<void> {
   const uid = currentUidB()
   if (!uid) throw new Error('ensureClientB() must be called before joinRoomAsB')
-  await updateDoc(doc(requireDbB(), 'rooms', roomId), { memberIds: arrayUnion(uid) })
+  const db = requireDbB()
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'rooms', roomId), { memberIds: arrayUnion(uid) })
+  batch.update(doc(db, 'activities', activityId), { memberIds: arrayUnion(uid) })
+  await batch.commit()
 }
 
 /**
  * B-side LEAVE with the exact service write shape (arrayRemove(uid)),
- * through client B's independent SDK (see joinRoomAsB for rationale).
+ * atomically across room + activity, through client B's independent SDK.
  */
-export async function leaveRoomAsB(roomId: string): Promise<void> {
+export async function leaveRoomAsB(roomId: string, activityId: string): Promise<void> {
   const uid = currentUidB()
   if (!uid) throw new Error('ensureClientB() must be called before leaveRoomAsB')
-  await updateDoc(doc(requireDbB(), 'rooms', roomId), { memberIds: arrayRemove(uid) })
+  const db = requireDbB()
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'rooms', roomId), { memberIds: arrayRemove(uid) })
+  batch.update(doc(db, 'activities', activityId), { memberIds: arrayRemove(uid) })
+  await batch.commit()
 }
 
 /**

@@ -14,13 +14,14 @@ import {
   USER_B,
   OUTSIDER,
   ROOM_ID,
-  ROOM_CODE,
   COMPLETION_ID,
   clearFirestoreData,
   cleanupTestEnv,
   client,
   seedRoom,
   seedCompletion,
+  leaveRoomBatch,
+  deleteFinalRoomBatch,
 } from './helpers'
 
 beforeEach(clearFirestoreData)
@@ -39,10 +40,8 @@ describe('E. Historical completion access', () => {
   it('E2: historical participant can read evidence after leaving the room', async () => {
     await seedRoom([USER_A, USER_B])
     await seedCompletion([USER_A, USER_B])
-    // B leaves the room (2 → 1 leave shape).
-    await assertSucceeds(
-      client(USER_B).firestore().doc(`rooms/${ROOM_ID}`).set({ memberIds: [USER_A] }, { merge: true }),
-    )
+    // B leaves the room (atomic 2 → 1 across room + activity).
+    await assertSucceeds(leaveRoomBatch(USER_B).commit())
     // Room no longer lists B, yet B can still read the evidence.
     await assertSucceeds(completionDoc(USER_B).get())
   })
@@ -50,13 +49,10 @@ describe('E. Historical completion access', () => {
   it('E3: historical participant can read evidence after the room is deleted', async () => {
     await seedRoom([USER_A, USER_B])
     await seedCompletion([USER_A, USER_B])
-    // B leaves first (room now [A]).
-    await client(USER_B).firestore().doc(`rooms/${ROOM_ID}`).set({ memberIds: [USER_A] }, { merge: true })
-    // A (sole member) deletes the room + code in one atomic batch.
-    const db = client(USER_A).firestore()
-    await assertSucceeds(
-      db.batch().delete(db.doc(`rooms/${ROOM_ID}`)).delete(db.doc(`roomCodes/${ROOM_CODE}`)).commit(),
-    )
+    // B leaves first (atomic; room + activity now [A]).
+    await leaveRoomBatch(USER_B).commit()
+    // A (sole member) deletes the room + code and empties the activity atomically.
+    await assertSucceeds(deleteFinalRoomBatch(USER_A).commit())
     // Evidence survives the room deletion; B still reads it (room no longer exists).
     const snap = await assertSucceeds(completionDoc(USER_B).get())
     expect(snap.exists).toBe(true)
@@ -73,14 +69,14 @@ describe('E. Historical completion access', () => {
     await seedRoom([USER_A, USER_B])
     await seedCompletion([USER_A, USER_B])
     // B leaves so they are purely historical, then attempts an edit.
-    await client(USER_B).firestore().doc(`rooms/${ROOM_ID}`).set({ memberIds: [USER_A] }, { merge: true })
+    await leaveRoomBatch(USER_B).commit()
     await assertFails(completionDoc(USER_B).set({ durationSeconds: 1 }, { merge: true }))
   })
 
   it('E6: historical participant cannot delete the completion', async () => {
     await seedRoom([USER_A, USER_B])
     await seedCompletion([USER_A, USER_B])
-    await client(USER_B).firestore().doc(`rooms/${ROOM_ID}`).set({ memberIds: [USER_A] }, { merge: true })
+    await leaveRoomBatch(USER_B).commit()
     await assertFails(completionDoc(USER_B).delete())
   })
 })
