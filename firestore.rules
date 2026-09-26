@@ -53,6 +53,97 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
+    // activities/{activityId} — WHAT the members are studying (Phase 10.3).
+    // Identity is the immutable document ID; names are non-unique display
+    // labels (1–60 chars after trimming). No counters live here: focus
+    // totals are always derived from immutable completion evidence. v1
+    // membership mirrors rooms (max 2, self-service join/leave shapes).
+    // Deletion is forbidden in v1 — the activity outlives its rooms and its
+    // membership changes so derived history stays resolvable. ownerId is
+    // provenance, never authority: any current member may rename, and the
+    // owner may leave without transferring anything.
+    // ------------------------------------------------------------------
+    match /activities/{activityId} {
+
+      // Display-name validity: a string of 1–60 characters after trimming.
+      // Uniqueness is deliberately NOT enforced (names are not identities).
+      function activityNameValid(name) {
+        return name is string
+          && name.trim().size() >= 1
+          && name.trim().size() <= 60;
+      }
+
+      // Members only. Covers both get and member-scoped list queries — the
+      // document rule itself authorizes every read; query filters never do.
+      allow read: if signedIn()
+        && request.auth.uid in resource.data.memberIds;
+
+      // The creator is always the sole first member; exact field shape;
+      // server-anchored creation time. No other member can be injected at
+      // creation, and no extra field can smuggle through.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['ownerId', 'memberIds', 'name', 'createdAt'])
+        && request.resource.data.keys().hasAll(['ownerId', 'memberIds', 'name', 'createdAt'])
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.memberIds == [request.auth.uid]
+        && activityNameValid(request.resource.data.name)
+        && request.resource.data.createdAt == request.time;
+
+      // Member-only updates restricted to two exact shapes:
+      //   membership: memberIds only (self-join 1 -> 2, self-leave n -> n-1)
+      //   rename:     name only (any current member; not owner-gated)
+      // ownerId and createdAt are immutable in every branch — the
+      // affectedKeys() constraints reject any write that touches them.
+      allow update: if signedIn()
+        && (
+             // ---- Membership branch ----
+             ( request.resource.data.diff(resource.data)
+                  .affectedKeys().hasOnly(['memberIds'])
+               && request.resource.data.memberIds is list
+               && (
+                    // Join: the joiner is NOT yet a member and adds exactly
+                    // themselves to the sole-member activity (same self-join
+                    // shape as rooms: kept existing member, one new UID, no
+                    // duplicate-UID writes, no replacements, no invites —
+                    // nobody can add a user who did not act themselves).
+                    (
+                      resource.data.memberIds.size() == 1
+                      && request.resource.data.memberIds.size() == 2
+                      && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+                      && !resource.data.memberIds.hasAll(request.resource.data.memberIds)
+                      && !(request.auth.uid in resource.data.memberIds)
+                      && request.auth.uid in request.resource.data.memberIds
+                    )
+                    // Leave: the caller removes exactly themselves — one
+                    // fewer member, nobody added, nobody else removed
+                    // (covers 2 -> 1 and the final member's 1 -> 0; the
+                    // activity document always remains).
+                    ||
+                    (
+                      request.resource.data.memberIds.size() + 1
+                        == resource.data.memberIds.size()
+                      && resource.data.memberIds.hasAll(request.resource.data.memberIds)
+                      && !request.resource.data.memberIds.hasAll(resource.data.memberIds)
+                      && request.auth.uid in resource.data.memberIds
+                      && !(request.auth.uid in request.resource.data.memberIds)
+                    )
+                  )
+             )
+             ||
+             // ---- Rename branch (any current member; name only) ----
+             ( request.resource.data.diff(resource.data)
+                  .affectedKeys().hasOnly(['name'])
+               && request.auth.uid in resource.data.memberIds
+               && activityNameValid(request.resource.data.name)
+             )
+           );
+
+      // v1: deletion is forbidden. The activity and its derived history must
+      // survive rooms, membership changes, and renames.
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
     // rooms/{roomId} — the two-person study room.
     // ------------------------------------------------------------------
     match /rooms/{roomId} {
