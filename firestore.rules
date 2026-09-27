@@ -361,31 +361,47 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
-    // Collection-group read path for completion evidence (Phase 10.7)
+    // Collection-group read path for completion evidence (Phase 10.7,
+    // SPLIT AUTHORIZATION DESIGN — Phase 10.9)
     // ------------------------------------------------------------------
-    // An activity aggregates completions across ALL of its rooms, so the
-    // statistics data layer reads evidence with ONE collectionGroup query
-    // over `completions` (activityId == X AND memberIds array-contains self).
-    // Firestore only authorizes a collection group query through a
-    // RECURSIVE-WILDCARD rule path — the nested rooms/{roomId}/completions
-    // rule above covers single-document reads and writes but yields "no
-    // matching allow statements" for collection group queries (verified
-    // against the emulator).
+    // Two completion-read paths exist, each with a distinct authority:
     //
-    // This rule grants EXACTLY the authority of the nested rule's
-    // historical-participant branch: the caller must be listed in the
-    // evidence document's OWN memberIds. It adds no membership-widening and
-    // is not a filter bypass — a collection group query must still carry the
-    // `memberIds array-contains <uid>` constraint to be provable, so nobody
-    // can enumerate evidence they never participated in (verified: dropping
-    // the constraint is denied).
+    //  1. THIS path = COLLECTION-GROUP ACTIVITY STATISTICS. An activity
+    //     aggregates evidence across ALL of its rooms, so the statistics
+    //     data layer reads with ONE collectionGroup query over
+    //     `completions` filtered by `activityId == X`. Firestore only
+    //     authorizes collection group queries through a
+    //     RECURSIVE-WILDCARD rule path — the nested rule above yields "no
+    //     matching allow statements" for them (verified against the
+    //     emulator). Authorization = CURRENT membership in the ACTIVITY
+    //     named by evidence.activityId: a current member reads the whole
+    //     activity's evidence (including sessions completed before they
+    //     joined), while a former member, a non-member, and an anonymous
+    //     caller are denied outright — denial, never an empty result.
+    //
+    //  2. The nested rooms/{roomId}/completions rule above = PERSONAL
+    //     HISTORICAL CATCH-UP, unchanged by Phase 10.9: current room
+    //     member OR personal participation in the evidence's own
+    //     memberIds. It keeps syncMissedRoomCompletions(), Phase 6.4
+    //     historical reads, and personal session materialization working
+    //     for participants who have since left or whose room is gone.
+    //     This path is NOT replaced or weakened here.
+    //
+    // The statistics query must carry `activityId == <constant>` to be
+    // provable: the get() below is only reachable when the filter pins the
+    // path, so no document set can be enumerated without it (verified:
+    // unfiltered collection-group enumeration is denied). Membership is
+    // checked against the ACTIVITY document — never against the evidence's
+    // own memberIds — which is exactly why a late joiner sees the earlier
+    // solo evidence.
     //
     // No write branch: authoring evidence still requires the nested
     // paired-batch rule above (running -> completed transition in the same
     // commit), so existence of this path cannot be used to forge evidence.
     match /{path=**}/completions/{completionId} {
       allow read: if signedIn()
-        && request.auth.uid in resource.data.memberIds;
+        && resource.data.activityId is string
+        && request.auth.uid in get(activityPath(resource.data.activityId)).data.memberIds;
     }
 
     // ------------------------------------------------------------------

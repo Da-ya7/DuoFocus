@@ -25,6 +25,9 @@ import {
   client,
   seedRoom,
   seedCompletion,
+  joinRoomBatch,
+  leaveRoomBatch,
+  unauthClient,
   runningTimer,
   pausedTimer,
   completedTimer,
@@ -191,66 +194,124 @@ describe('C. Completion evidence (atomic with timer completion)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Phase 10.7 — Collection-group read path (activity statistics data layer)
+// Phase 10.7/10.9 — Collection-group STATISTICS path (split design)
 // ---------------------------------------------------------------------------
 // The statistics service reads evidence with ONE collectionGroup query
-// (activityId == X AND memberIds array-contains self). Firestore only
-// authorizes collection group queries through a RECURSIVE-WILDCARD rule path,
-// so these cases pin what that path grants — and, more importantly, that it
-// grants nothing more than the nested room rule already did.
-describe('Collection-group read path (Phase 10.7)', () => {
-  /** The exact query shape the service issues (memberIds constraint optional). */
-  function groupQuery(uid: string, opts: { activityId?: string | null; memberFilter?: boolean } = {}) {
+// filtered ONLY by `activityId == X`. Firestore only authorizes collection
+// group queries through a RECURSIVE-WILDCARD rule path, so these cases pin
+// what that path grants under the Phase 10.9 SPLIT design:
+//   statistics = CURRENT membership in the activity (this rule block);
+//   personal   = the nested rooms/{roomId}/completions rule, untouched
+//                (historical.test.ts / syncCatchUp pin that side; C20 below
+//                verifies the split end-to-end).
+describe('Collection-group statistics path (Phase 10.7/10.9)', () => {
+  /** The exact query shape the statistics service issues (activityId only). */
+  function statsQuery(uid: string, opts: { activityId?: string | null } = {}) {
     const db = client(uid).firestore()
     const activityId = opts.activityId === undefined ? ACTIVITY_ID : opts.activityId
-    let q = db.collectionGroup('completions')
-    if (activityId !== null) {
-      q = q.where('activityId', '==', activityId)
-    }
-    return opts.memberFilter === false ? q : q.where('memberIds', 'array-contains', uid)
+    const q = db.collectionGroup('completions')
+    return activityId === null ? q : q.where('activityId', '==', activityId)
   }
 
-  it('C16: a participant reads their own evidence through the group query', async () => {
-    await seedRoom([USER_A, USER_B], completedTimer())
-    await seedCompletion([USER_A, USER_B])
-    const snap = await assertSucceeds(groupQuery(USER_A).get())
-    expect(snap.size).toBe(1)
-    expect(snap.docs[0]!.data().activityId).toBe(ACTIVITY_ID)
+  /** Direct nested read of one evidence doc (the personal/historical path). */
+  function nestedDoc(uid: string, completionId: string, roomId = ROOM_ID) {
+    return client(uid).firestore().doc(`rooms/${roomId}/completions/${completionId}`)
+  }
+
+  /**
+   * Shared fixture — the Phase 10.9 target scenario in miniature: A starts
+   * SOLO with one completion, B joins afterwards, then a shared completion
+   * happens. The timer is left running so the join rule admits B (joins are
+   * blocked while the timer reads 'completed'); evidence itself is seeded
+   * through the rules-disabled fixture path, as everywhere in this file.
+   */
+  async function soloThenShared(): Promise<void> {
+    await seedRoom([USER_A], runningTimer(BASE_TIME))
+    await seedCompletion([USER_A]) // before B has any relationship with the activity
+    await assertSucceeds(joinRoomBatch(USER_B, USER_A).commit())
+    await seedCompletion([USER_A, USER_B], ROOM_ID, 'compShared') // after B joined
+  }
+
+  it('C16: a CURRENT member reads ALL activity evidence — including the solo session from before they joined (req 1+2)', async () => {
+    await soloThenShared()
+    // B joined AFTER the first completion and never participated in it, yet
+    // the statistics query hands B the whole activity evidence set.
+    const snap = await assertSucceeds(statsQuery(USER_B).get())
+    expect(snap.size).toBe(2)
+    expect(snap.docs.map((d) => d.id).sort()).toEqual([COMPLETION_ID, 'compShared'].sort())
+    const solo = snap.docs.find((d) => d.id === COMPLETION_ID)!
+    expect(solo.data().memberIds).toEqual([USER_A]) // evidence B has no part in
+    expect(solo.data().activityId).toBe(ACTIVITY_ID)
   })
 
-  it('C17: a non-participant gets NO evidence from the same group query (and no single-doc read)', async () => {
-    await seedRoom([USER_A, USER_B], completedTimer())
-    await seedCompletion([USER_A, USER_B])
-    // Provable-but-self-scoped: the constraint can only ever match evidence
-    // the caller participated in, so the query yields nothing.
-    const snap = await assertSucceeds(groupQuery(OUTSIDER).get())
-    expect(snap.size).toBe(0)
-    // The document itself stays unreadable to the non-participant.
+  it('C17: the second current member receives the identical complete evidence set (req 3)', async () => {
+    await soloThenShared()
+    const aSet = (await assertSucceeds(statsQuery(USER_A).get())).docs.map((d) => d.id).sort()
+    const bSet = (await assertSucceeds(statsQuery(USER_B).get())).docs.map((d) => d.id).sort()
+    expect(aSet).toHaveLength(2)
+    expect(aSet).toEqual(bSet)
+  })
+
+  it('C18: a non-member is DENIED activity statistics — no enumeration by activityId (req 4+9)', async () => {
+    await soloThenShared()
+    // The provable activityId filter does NOT soften the verdict: a rule
+    // that provably fails yields denial, never a silently empty result.
+    await assertFails(statsQuery(OUTSIDER).get())
+    // The document itself stays unreadable to the non-participant (nested path).
+    await assertFails(nestedDoc(OUTSIDER, COMPLETION_ID).get())
+  })
+
+  it('C19: an anonymous caller is DENIED activity statistics (req 5)', async () => {
+    await soloThenShared()
     await assertFails(
-      client(OUTSIDER).firestore().doc(`rooms/${ROOM_ID}/completions/${COMPLETION_ID}`).get(),
+      unauthClient()
+        .firestore()
+        .collectionGroup('completions')
+        .where('activityId', '==', ACTIVITY_ID)
+        .get(),
+    )
+    await assertFails(
+      unauthClient().firestore().doc(`rooms/${ROOM_ID}/completions/${COMPLETION_ID}`).get(),
     )
   })
 
-  it('C18: dropping the memberIds constraint is denied — no global enumeration', async () => {
-    await seedRoom([USER_A, USER_B], completedTimer())
-    await seedCompletion([USER_A, USER_B])
-    await assertFails(groupQuery(USER_A, { memberFilter: false }).get())
+  it('C20: a FORMER member is denied the statistics path but keeps the nested personal path (req 6+7+8)', async () => {
+    await soloThenShared()
+    // B leaves — atomic 2 -> 1 across room AND activity.
+    await assertSucceeds(leaveRoomBatch(USER_B, USER_A).commit())
+
+    // Membership, not participation, gates statistics: B is still listed on
+    // compShared, yet BOTH statistics shapes are denied — the activity
+    // cannot be enumerated through this path in either form.
+    await assertFails(statsQuery(USER_B).get())
+    await assertFails(statsQuery(USER_B, { activityId: null }).get())
+
+    // The intentional split: B's personal historical access is untouched.
+    const own = await assertSucceeds(nestedDoc(USER_B, 'compShared').get())
+    expect(own.exists).toBe(true)
+    // ...including the exact catch-up list shape syncMissedRoomCompletions issues.
+    const catchUp = await assertSucceeds(
+      client(USER_B)
+        .firestore()
+        .collection(`rooms/${ROOM_ID}/completions`)
+        .where('memberIds', 'array-contains', USER_B)
+        .get(),
+    )
+    expect(catchUp.size).toBe(1)
+    expect(catchUp.docs[0]!.id).toBe('compShared')
+    // While evidence B has NO part in stays unreadable on the nested path.
+    await assertFails(nestedDoc(USER_B, COMPLETION_ID).get())
   })
 
-  it('C19: the group query is participant-scoped across rooms even without an activityId filter', async () => {
-    await seedRoom([USER_A, USER_B], completedTimer())
-    await seedCompletion([USER_A, USER_B])
-    // A second, unrelated room + evidence owned by OUTSIDER only.
-    await seedRoom([OUTSIDER], completedTimer(), 'roomZz', 'ZZ2345')
-    await seedCompletion([OUTSIDER], 'roomZz', 'compZz', undefined, 'ZZ2345')
-
-    const snap = await assertSucceeds(groupQuery(USER_A, { activityId: null }).get())
-    // Only A's own evidence — the rules, not the query shape, are the guard.
-    expect(snap.size).toBe(1)
-    expect(snap.docs[0]!.data().activityId).toBe(ACTIVITY_ID)
+  it('C21: unfiltered collection-group enumeration stays denied for EVERYONE (req 10)', async () => {
+    await soloThenShared()
+    // Even a CURRENT member cannot enumerate without the activityId pin...
+    await assertFails(statsQuery(USER_A, { activityId: null }).get())
+    // ...nor an outsider, who gains nothing from dropping the filter.
+    await assertFails(statsQuery(OUTSIDER, { activityId: null }).get())
   })
 
-  it('C20: the collection-group path never authorizes a write', async () => {
+  it('C22: the collection-group path never authorizes a write (unchanged by Phase 10.9)', async () => {
     await seedRoom([USER_A, USER_B], runningTimer(BASE_TIME))
     await seedCompletion([USER_A, USER_B])
     // Outside the paired timer transition, evidence stays unwritable for every

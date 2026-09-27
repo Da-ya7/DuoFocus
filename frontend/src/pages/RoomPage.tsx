@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { leaveRoom, subscribeToRoom } from '../services/rooms'
+import { renameActivity, subscribeToActivity } from '../services/activities'
+import { ActivityHeader } from '../components/activity/ActivityHeader'
 import {
   completeTimerIfDue,
   derivedRemainingMs,
@@ -13,6 +15,7 @@ import {
 } from '../services/timer'
 import type { Room } from '../types/room'
 import { ROOM_MAX_MEMBERS } from '../types/room'
+import type { Activity } from '../types/activity'
 import { DEFAULT_DURATION_SECONDS, type TimerStatus } from '../types/timer'
 import { friendlyTimerError } from '../services/timerErrors'
 import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
@@ -55,6 +58,12 @@ export function RoomPage() {
   const [leaveError, setLeaveError] = useState<string | null>(null)
   const [presenceList, setPresenceList] = useState<RoomPresence[]>([])
 
+  // Phase 10.8: the room's persistent activity (WHAT is being studied). The
+  // name is read from the activity document through the existing service — it
+  // is never copied into or derived from the room document.
+  const [activity, setActivity] = useState<Activity | null>(null)
+  const [activityError, setActivityError] = useState<string | null>(null)
+
   // Timer UI state: derived display value + in-flight flag + friendly error.
   const [tick, setTick] = useState(0)
   const [busyAction, setBusyAction] = useState<
@@ -89,6 +98,35 @@ export function RoomPage() {
 
     return () => unsubscribe()
   }, [roomId, uid])
+
+  // ---- Phase 10.8: room activity name (membership equals the room's) ----
+  // A live document listener, so a rename by either member (or a change made
+  // elsewhere) is reflected without a reload. Statistics are NOT listened to:
+  // this phase only needs the name, and Phase 10.8 explicitly does not require
+  // realtime activity statistics.
+  const activityId = room?.activityId ?? null
+
+  useEffect(() => {
+    if (!roomId || !uid || !activityId) {
+      setActivity(null)
+      return
+    }
+
+    const unsubscribe = subscribeToActivity(
+      activityId,
+      (nextActivity) => {
+        setActivity(nextActivity)
+        setActivityError(null)
+      },
+      () => {
+        // Non-fatal: the room and its timer keep working even if the activity
+        // is momentarily unreadable.
+        setActivityError('Activity details are unavailable right now.')
+      },
+    )
+
+    return () => unsubscribe()
+  }, [roomId, uid, activityId])
 
   // ---- Phase 7.4/7.5/7.6: presence lifecycle (subscription + heartbeat + local
   // idle detection + UI state) ----
@@ -233,6 +271,15 @@ export function RoomPage() {
     [roomId, busyAction],
   )
 
+  // Rename goes through the activity service (never a direct Firestore write);
+  // the listener above delivers the new name, so nothing is patched locally.
+  // Rejections propagate to ActivityHeader, which renders them safely.
+  const handleRenameActivity = useCallback(async (name: string) => {
+    const targetActivityId = roomRef.current?.activityId
+    if (!targetActivityId) return
+    await renameActivity(targetActivityId, name)
+  }, [])
+
   const handleLeave = async () => {
     if (!roomId || leaving) return
     setLeaving(true)
@@ -303,6 +350,26 @@ export function RoomPage() {
 
   return (
     <section className="flex flex-1 flex-col items-center py-12">
+      {/* ---------- Study activity (Phase 10.8) ---------- */}
+      <div className="mb-8 w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <p className="text-center text-xs font-semibold uppercase tracking-wider text-slate-500">
+          Study Activity
+        </p>
+        {activity ? (
+          <ActivityHeader
+            name={activity.name}
+            canRename={isMember}
+            onRename={handleRenameActivity}
+          />
+        ) : activityError ? (
+          <p role="alert" className="mt-3 text-center text-xs text-red-700">
+            {activityError}
+          </p>
+        ) : (
+          <p className="mt-3 text-center text-sm text-slate-400">Loading activity…</p>
+        )}
+      </div>
+
       {/* ---------- Shared timer ---------- */}
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-center text-xs font-semibold uppercase tracking-wider text-slate-500">

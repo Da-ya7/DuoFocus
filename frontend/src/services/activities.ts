@@ -282,10 +282,16 @@ export async function renameActivity(activityId: string, name: string): Promise<
 // (rooms/{roomId}/completions/{completionId}); nothing is stored on the
 // activity document. Activities can span multiple rooms, so evidence is
 // retrieved with ONE collectionGroup query over `completions` filtered by
-// activityId + memberIds-array-contains-caller. The memberIds filter is both
-// required for correctness (historical-participant access) and for the
-// completion read rule to authorize the query server-side — the caller can
-// never widen it by passing an activityId. All math is delegated to the
+// `activityId == X` alone (Phase 10.9 split design: authorization is the
+// Firestore rule — CURRENT membership in the activity — not a client-side
+// filter on the evidence's historical memberIds). A caller who is not a
+// current member is denied by the rules outright (never handed an empty
+// result), and the caller can never widen the query: the activityId filter
+// is a constant, and the rule independently proves it against the activity
+// document. The historical memberIds filter deliberately plays NO part in
+// statistics — that is what makes a late joiner see the whole activity's
+// evidence — while personal historical catch-up keeps its own separate
+// nested path (see firestore.rules). All math is delegated to the
 // already-approved pure utility (src/utils/activityStats.ts); no Firebase
 // concern enters it and no second statistics implementation exists.
 
@@ -320,20 +326,23 @@ async function loadAccessibleActivity(activityId: string): Promise<Activity> {
 }
 
 /**
- * The single authorized evidence query: collectionGroup over `completions`,
- * filtered by activityId and by the caller's historical participation. Every
- * returned document is authorized by the completion read rule. There is no
- * client-side filtering and no global scan.
+ * The single authorized evidence query: collectionGroup over `completions`
+ * filtered by `activityId == X` only. "Give me all completion evidence for
+ * this activity that I am currently authorized to read" — the collection-
+ * group read rule (firestore.rules, Phase 10.9 split design) authorizes the
+ * query server-side iff the caller is a CURRENT member of the activity, so
+ * every returned document belongs to this activity and no document is
+ * hidden by historical participation. There is no client-side filtering
+ * and no global scan: without the activityId constraint the rule itself
+ * denies the query (enumeration stays impossible).
  */
 async function queryActivityCompletions(
   activityId: string,
-  uid: string,
 ): Promise<ActivityCompletionRecord[]> {
   try {
     const completionsQuery = query(
       collectionGroup(db, COMPLETIONS),
       where('activityId', '==', activityId),
-      where('memberIds', 'array-contains', uid),
     )
     const snapshot = await getDocs(completionsQuery)
     return snapshot.docs.map((completionDoc) =>
@@ -372,17 +381,18 @@ export async function getActivitiesForUser(): Promise<Activity[]> {
 }
 
 /**
- * Retrieves the caller-authorized completion evidence for one activity.
+ * Retrieves the completion evidence for one activity as a CURRENT member.
  * Access to the activity itself is verified first (rules-authoritative),
- * then the member-scoped collectionGroup query returns only evidence the
- * caller historically participated in.
+ * then the collectionGroup query — authorized by current activity
+ * membership in the rules — returns the activity's complete evidence set,
+ * including sessions completed before the caller joined.
  */
 export async function getActivityCompletions(
   activityId: string,
 ): Promise<ActivityCompletionRecord[]> {
-  const uid = requireUid()
+  requireUid()
   await loadAccessibleActivity(activityId)
-  return queryActivityCompletions(activityId, uid)
+  return queryActivityCompletions(activityId)
 }
 
 /**
@@ -392,9 +402,9 @@ export async function getActivityCompletions(
  * completions still resolve to the same activityId.
  */
 export async function getActivitySummary(activityId: string): Promise<ActivitySummary> {
-  const uid = requireUid()
+  requireUid()
   const activity = await loadAccessibleActivity(activityId)
-  const completions = await queryActivityCompletions(activityId, uid)
+  const completions = await queryActivityCompletions(activityId)
   return calculateActivitySummary({ id: activity.id, name: activity.name }, completions)
 }
 
@@ -404,8 +414,8 @@ export async function getActivitySummary(activityId: string): Promise<ActivitySu
  * documents). Shares the single evidence-query helper above.
  */
 export async function getActivityHistory(activityId: string): Promise<ActivityHistoryEntry[]> {
-  const uid = requireUid()
+  requireUid()
   const activity = await loadAccessibleActivity(activityId)
-  const completions = await queryActivityCompletions(activityId, uid)
+  const completions = await queryActivityCompletions(activityId)
   return calculateActivityHistory({ id: activity.id }, completions)
 }

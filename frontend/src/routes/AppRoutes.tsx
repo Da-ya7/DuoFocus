@@ -4,6 +4,7 @@ import { HomePage } from '../pages/HomePage'
 import { LoginPage } from '../pages/LoginPage'
 import { RegisterPage } from '../pages/RegisterPage'
 import { AppHomePage } from '../pages/AppHomePage'
+import { ActivityDetailPage } from '../pages/ActivityDetailPage'
 import { RoomPage } from '../pages/RoomPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
 import { ProtectedRoute } from './ProtectedRoute'
@@ -18,6 +19,7 @@ export function AppRoutes() {
         <Route path="/app" element={<ProtectedRoute />}>
           <Route index element={<AppHomePage />} />
           <Route path="room/:roomId" element={<RoomPage />} />
+          <Route path="activity/:activityId" element={<ActivityDetailPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Route>

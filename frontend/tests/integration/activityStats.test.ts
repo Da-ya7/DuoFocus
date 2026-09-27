@@ -39,6 +39,8 @@ import {
   renameActivity,
 } from '../../src/services/activities'
 import { ActivityError } from '../../src/types/activity'
+import { getUserSessions } from '../../src/services/sessions'
+import { calculateStudyStatistics } from '../../src/utils/stats'
 
 beforeAll(() => assertIntegrationEnvironment())
 
@@ -332,6 +334,37 @@ describe('Multiple rooms → one activity', () => {
     expect(after.totalFocusSeconds).toBe(3600)
     expect(after.studyDays).toBe(2)
   })
+
+  it('7: deleting ONE of two rooms keeps the full total and history (room existence is not required)', async () => {
+    const id = await makeActivity(USER_A, 'DSA')
+    await seedRoomDocs('roomA', 'AA2345', id)
+    await seedRoomDocs('roomB', 'BB2345', id)
+    await seedEvidence('roomA', 'cA', {
+      activityId: rvString(id),
+      durationSeconds: rvInt(3000), // 50 minutes
+      completedAt: rvTimestamp(DAY1),
+    })
+    await seedEvidence('roomB', 'cB', {
+      activityId: rvString(id),
+      durationSeconds: rvInt(600), // 10 minutes
+      completedAt: rvTimestamp(DAY2),
+    })
+
+    await signInAs(USER_A)
+    expect((await getActivitySummary(id)).totalFocusSeconds).toBe(3600)
+
+    // Delete Room 1 ONLY — its evidence must survive as activity evidence.
+    await adminDeleteDoc('rooms/roomA')
+    await adminDeleteDoc('roomCodes/AA2345')
+    expect(await adminGetDoc('rooms/roomA')).toBeNull()
+    expect(await adminGetDoc('rooms/roomB')).not.toBeNull()
+
+    const summary = await getActivitySummary(id)
+    expect(summary.totalFocusSeconds).toBe(3600)
+    expect(summary.studyDays).toBe(2)
+    expect(await getActivityHistory(id)).toHaveLength(2)
+    expect(await getActivityCompletions(id)).toHaveLength(2)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -472,6 +505,171 @@ describe('Multi-user', () => {
     expect(aSummary).toEqual(bSummary)
   })
 })
+
+// ---------------------------------------------------------------------------
+// SHARED TOTALS ACROSS MEMBERSHIP CHANGE (Phase 10.9 — Part 6)
+// ---------------------------------------------------------------------------
+
+describe('Late joiner sees the whole activity (Phase 10.9)', () => {
+  it('6: A solo 50m on day 1, B joins, shared 10m on day 2 → BOTH see 60m with identical evidence and a 2-day history', async () => {
+    const id = await makeActivity(USER_A, 'DSA')
+    // Day 1: A completes SOLO — before B has any relationship with the activity.
+    await seedOne(id, { id: 'solo', duration: 3000, iso: DAY1, members: [USER_A] })
+    // Day 2: B self-joins, then a shared 10-minute completion happens.
+    await signInAs(USER_B)
+    await joinActivity(id)
+    await seedOne(id, { id: 'shared', duration: 600, iso: DAY2, members: [USER_A, USER_B] })
+
+    await signInAs(USER_A)
+    const aSummary = await getActivitySummary(id)
+    const aCompletions = await getActivityCompletions(id)
+    const aHistory = await getActivityHistory(id)
+    await signInAs(USER_B)
+    const bSummary = await getActivitySummary(id)
+    const bCompletions = await getActivityCompletions(id)
+    const bHistory = await getActivityHistory(id)
+
+    // 50 + 10 minutes = 60 minutes for BOTH members — shared, counted once.
+    expect(aSummary.totalFocusSeconds).toBe(3600)
+    expect(bSummary.totalFocusSeconds).toBe(3600)
+    expect(aSummary).toEqual(bSummary)
+
+    // Evidence count: 2 — and B receives the solo evidence B never took part in.
+    expect(aCompletions).toHaveLength(2)
+    expect(bCompletions).toHaveLength(2)
+    expect(bCompletions).toEqual(aCompletions)
+
+    // History: 2 days (timestamps on separate days), identical for both.
+    expect(aHistory).toHaveLength(2)
+    expect(bHistory).toEqual(aHistory)
+    expect(aHistory.reduce((sum, day) => sum + day.focusSeconds, 0)).toBe(3600)
+  })
+
+  it('6b+9+11 (real services): late joiner sees solo evidence; leaver is DENIED statistics but keeps catch-up; remaining member keeps full history', async () => {
+    const { createRoom, joinRoom, leaveRoom } = await import('../../src/services/rooms')
+    const { completeTimerIfDue } = await import('../../src/services/timer')
+    const { syncMissedRoomCompletions } = await import('../../src/services/sessions')
+    const { adminSeedRoomTimer } = await import('./helpers')
+    const dueIso = new Date(Date.now() - 1500_000 - 60_000).toISOString()
+
+    // 1–2. A creates DSA and completes a solo 25-minute session (REAL evidence
+    // produced through the rules: timer transition + evidence in one batch).
+    await signInAs(USER_A)
+    const { roomId, roomCode, activityId } = await createRoom('DSA')
+    await adminSeedRoomTimer(roomId, { status: 'running', remainingSeconds: 1500, transitionedAtIso: dueIso })
+    await completeTimerIfDue(roomId)
+    expect(await adminListDocs(`rooms/${roomId}/completions`)).toHaveLength(1)
+    // Reset the completed timer so the join rule admits B (joins are blocked
+    // while the timer reads 'completed') — membership churn, not timer state,
+    // is under test here.
+    await adminSeedRoomTimer(roomId, { status: 'idle', remainingSeconds: 1500, transitionedAtIso: dueIso })
+
+    // 3–4. B joins AFTER that completion and opens the activity: B must see A's
+    // pre-join evidence (the Phase 10.8 discrepancy this phase fixes).
+    await signInAs(USER_B)
+    await joinRoom(roomCode)
+    expect((await getActivitySummary(activityId)).totalFocusSeconds).toBe(1500)
+
+    // 5–6. A + B complete another 25 minutes together (shared, counted once).
+    await signInAs(USER_A)
+    await adminSeedRoomTimer(roomId, { status: 'running', remainingSeconds: 1500, transitionedAtIso: dueIso })
+    await completeTimerIfDue(roomId)
+
+    await signInAs(USER_A)
+    const aSummary = await getActivitySummary(activityId)
+    const aCompletions = await getActivityCompletions(activityId)
+    await signInAs(USER_B)
+    const bSummary = await getActivitySummary(activityId)
+    const bCompletions = await getActivityCompletions(activityId)
+    expect(aSummary.totalFocusSeconds).toBe(3000)
+    expect(bSummary.totalFocusSeconds).toBe(3000)
+    expect(aCompletions).toHaveLength(2)
+    expect(bCompletions).toEqual(aCompletions)
+    expect(await getActivityHistory(activityId)).toHaveLength(1) // both today
+
+    // 8. A leaves (atomic 2 → 1 across room AND activity).
+    await signInAs(USER_A)
+    await leaveRoom(roomId)
+
+    // 9. A can NO LONGER reach activity-level statistics — typed denial,
+    // never silently empty statistics.
+    await signInAs(USER_A)
+    await expect(getActivitySummary(activityId)).rejects.toMatchObject({
+      name: 'ActivityError',
+      code: 'permission-denied',
+    })
+    await expect(getActivityCompletions(activityId)).rejects.toMatchObject({
+      name: 'ActivityError',
+      code: 'permission-denied',
+    })
+
+    // 10. A's personal historical catch-up STILL works through the nested path:
+    // both sessions A personally participated in materialize.
+    const missed = await syncMissedRoomCompletions(roomId)
+    expect(missed).toHaveLength(2)
+    expect(calculateStudyStatistics(await getUserSessions()).totalFocusSeconds).toBe(3000)
+
+    // 11. B — still a current member — keeps the complete activity history.
+    await signInAs(USER_B)
+    expect((await getActivitySummary(activityId)).totalFocusSeconds).toBe(3000)
+    expect(await getActivityCompletions(activityId)).toHaveLength(2)
+    expect(await getActivityHistory(activityId)).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PERSONAL VS ACTIVITY STATISTICS (Phase 10.9 — Part 8)
+// ---------------------------------------------------------------------------
+
+describe('Personal sessions vs shared activity totals (Phase 10.9)', () => {
+  it('8: one shared 50m event → activity 50m for both (NOT 100m); each member\'s personal stats show their own 50m', async () => {
+    const id = await makeActivity(USER_A, 'DSA')
+    await signInAs(USER_B)
+    await joinActivity(id) // activity members [A, B]
+    // ONE shared completion event with both participants.
+    await seedOne(id, { id: 'shared', duration: 3000, iso: DAY1, members: [USER_A, USER_B] })
+    // Each member materializes their OWN personal session from that same event.
+    await seedPersonalSession(USER_A, 'shared', id, 3000)
+    await seedPersonalSession(USER_B, 'shared', id, 3000)
+
+    await signInAs(USER_A)
+    const aActivity = await getActivitySummary(id)
+    const aPersonal = calculateStudyStatistics(await getUserSessions())
+    await signInAs(USER_B)
+    const bActivity = await getActivitySummary(id)
+    const bPersonal = calculateStudyStatistics(await getUserSessions())
+
+    // Activity: shared evidence counted once — never 100 minutes.
+    expect(aActivity.totalFocusSeconds).toBe(3000)
+    expect(bActivity.totalFocusSeconds).toBe(3000)
+    expect(aActivity).toEqual(bActivity)
+
+    // Personal statistics: each member's own sessions — unchanged by sharing.
+    expect(aPersonal.totalFocusSeconds).toBe(3000)
+    expect(bPersonal.totalFocusSeconds).toBe(3000)
+    expect(aPersonal.totalSessions).toBe(1)
+    expect(bPersonal.totalSessions).toBe(1)
+  })
+})
+
+/** Seeds a personal session document (rules-disabled fixture; test-only). */
+async function seedPersonalSession(
+  uid: string,
+  completionId: string,
+  activityId: string,
+  durationSeconds: number,
+): Promise<void> {
+  await adminSetDoc(`users/${uid}/sessions/room1_${completionId}`, {
+    userId: rvString(uid),
+    roomId: rvString('room1'),
+    completionId: rvString(completionId),
+    roomCode: rvString('234567'),
+    durationSeconds: rvInt(durationSeconds),
+    activityId: rvString(activityId),
+    completedAt: rvTimestamp(DAY1),
+    createdAt: rvTimestamp(DAY1),
+  })
+}
 
 // ---------------------------------------------------------------------------
 // ROOM DELETION (31–33)

@@ -10,9 +10,13 @@ import {
   normalizeRoomCode,
 } from '../services/rooms'
 import { deleteUserSession, getUserSessions } from '../services/sessions'
+import { getActivitiesForUser, getActivitySummary } from '../services/activities'
 import { calculateStudyStatistics } from '../utils/stats'
+import { resolveRoomTopic } from '../utils/activityUi'
 import { StatsSummary } from '../components/stats/StatsSummary'
 import { SessionHistory } from '../components/stats/SessionHistory'
+import { ActivityList, type ActivityListItem } from '../components/activity/ActivityList'
+import { ACTIVITY_NAME_MAX_LENGTH } from '../types/activity'
 import { RoomError } from '../types/room'
 import type { StudySession } from '../types/session'
 
@@ -29,6 +33,7 @@ export function AppHomePage() {
   const navigate = useNavigate()
 
   const [code, setCode] = useState('')
+  const [topic, setTopic] = useState('')
   const [busy, setBusy] = useState<'create' | 'join' | 'logout' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -48,6 +53,12 @@ export function AppHomePage() {
   const [statsError, setStatsError] = useState<string | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  // Persistent study activities (Phase 10.8): names + shared focus totals
+  // come from the Phase 10.7 statistics data layer — never computed here.
+  const [activities, setActivities] = useState<ActivityListItem[]>([])
+  const [activitiesLoading, setActivitiesLoading] = useState(true)
+  const [activitiesError, setActivitiesError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!uid) return
@@ -100,6 +111,57 @@ export function AppHomePage() {
     }
   }, [uid])
 
+  useEffect(() => {
+    if (!uid) {
+      setActivitiesLoading(false)
+      return
+    }
+    let cancelled = false
+    setActivitiesLoading(true)
+    setActivitiesError(null)
+
+    getActivitiesForUser()
+      .then(async (memberActivities) => {
+        // One summary per activity through the existing service API (each
+        // summary is derived from that activity's immutable completion
+        // evidence: shared sessions counted once, no client-side counting).
+        const summaries = await Promise.all(
+          memberActivities.map((activity) => getActivitySummary(activity.id)),
+        )
+        return summaries
+          .map((summary) => ({
+            id: summary.activityId,
+            name: summary.name,
+            totalFocusSeconds: summary.totalFocusSeconds,
+          }))
+          // Display order only: most-studied first, then by name for a stable
+          // list. No study data is derived from this ordering.
+          .sort(
+            (a, b) =>
+              b.totalFocusSeconds - a.totalFocusSeconds || a.name.localeCompare(b.name),
+          )
+      })
+      .then((items) => {
+        if (!cancelled) {
+          setActivities(items)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setActivitiesError('Could not load your activities.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setActivitiesLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [uid])
+
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
 
   const handleDeleteSession = async (sessionId: string) => {
@@ -133,7 +195,9 @@ export function AppHomePage() {
     setError(null)
     setBusy('create')
     try {
-      const { roomId } = await createRoom()
+      // Blank/whitespace input means "no topic supplied" -> the room service's
+      // own default activity name ("Random Topic"). Never a second default.
+      const { roomId } = await createRoom(resolveRoomTopic(topic))
       navigate(`/app/room/${roomId}`)
     } catch (err) {
       setError(friendlyRoomError(err))
@@ -206,11 +270,29 @@ export function AppHomePage() {
         ) : (
           <>
             <div className="mt-6">
+              <label htmlFor="room-topic" className="block text-sm font-medium text-slate-700">
+                What&apos;s the topic?{' '}
+                <span className="font-normal text-slate-400">(optional)</span>
+              </label>
+              <input
+                id="room-topic"
+                type="text"
+                autoComplete="off"
+                maxLength={ACTIVITY_NAME_MAX_LENGTH}
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                disabled={busy !== null}
+                placeholder="e.g. DSA"
+                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900 disabled:opacity-50"
+              />
+              <p className="mt-1.5 text-center text-xs text-slate-400">
+                Leave it blank and the activity is called &ldquo;Random Topic&rdquo;.
+              </p>
               <button
                 type="button"
                 onClick={handleCreate}
                 disabled={busy !== null}
-                className="w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="mt-3 w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy === 'create' ? 'Creating room…' : 'Create Room'}
               </button>
@@ -301,6 +383,30 @@ export function AppHomePage() {
                 deletingSessionId={deletingSessionId}
               />
             </div>
+          )}
+        </div>
+
+        {/* Study Activities Section (Phase 10.8) */}
+        <div className="mt-8 border-t border-slate-200 pt-6">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Your Activities
+          </h2>
+          {activitiesLoading ? (
+            <div className="rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-xs text-slate-400">
+              Loading activities…
+            </div>
+          ) : activitiesError ? (
+            <div
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 p-3 text-center text-xs text-red-700"
+            >
+              {activitiesError}
+            </div>
+          ) : (
+            <ActivityList
+              items={activities}
+              onSelect={(activityId) => navigate(`/app/activity/${activityId}`)}
+            />
           )}
         </div>
 
