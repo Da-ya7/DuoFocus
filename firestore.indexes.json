@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "completions",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "activityId", "order": "ASCENDING" },
+        { "fieldPath": "memberIds", "arrayConfig": "CONTAINS" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

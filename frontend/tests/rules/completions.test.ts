@@ -189,3 +189,92 @@ describe('C. Completion evidence (atomic with timer completion)', () => {
     await assertFails(atomicCompletionBatch(USER_A).commit())
   })
 })
+
+// ---------------------------------------------------------------------------
+// Phase 10.7 — Collection-group read path (activity statistics data layer)
+// ---------------------------------------------------------------------------
+// The statistics service reads evidence with ONE collectionGroup query
+// (activityId == X AND memberIds array-contains self). Firestore only
+// authorizes collection group queries through a RECURSIVE-WILDCARD rule path,
+// so these cases pin what that path grants — and, more importantly, that it
+// grants nothing more than the nested room rule already did.
+describe('Collection-group read path (Phase 10.7)', () => {
+  /** The exact query shape the service issues (memberIds constraint optional). */
+  function groupQuery(uid: string, opts: { activityId?: string | null; memberFilter?: boolean } = {}) {
+    const db = client(uid).firestore()
+    const activityId = opts.activityId === undefined ? ACTIVITY_ID : opts.activityId
+    let q = db.collectionGroup('completions')
+    if (activityId !== null) {
+      q = q.where('activityId', '==', activityId)
+    }
+    return opts.memberFilter === false ? q : q.where('memberIds', 'array-contains', uid)
+  }
+
+  it('C16: a participant reads their own evidence through the group query', async () => {
+    await seedRoom([USER_A, USER_B], completedTimer())
+    await seedCompletion([USER_A, USER_B])
+    const snap = await assertSucceeds(groupQuery(USER_A).get())
+    expect(snap.size).toBe(1)
+    expect(snap.docs[0]!.data().activityId).toBe(ACTIVITY_ID)
+  })
+
+  it('C17: a non-participant gets NO evidence from the same group query (and no single-doc read)', async () => {
+    await seedRoom([USER_A, USER_B], completedTimer())
+    await seedCompletion([USER_A, USER_B])
+    // Provable-but-self-scoped: the constraint can only ever match evidence
+    // the caller participated in, so the query yields nothing.
+    const snap = await assertSucceeds(groupQuery(OUTSIDER).get())
+    expect(snap.size).toBe(0)
+    // The document itself stays unreadable to the non-participant.
+    await assertFails(
+      client(OUTSIDER).firestore().doc(`rooms/${ROOM_ID}/completions/${COMPLETION_ID}`).get(),
+    )
+  })
+
+  it('C18: dropping the memberIds constraint is denied — no global enumeration', async () => {
+    await seedRoom([USER_A, USER_B], completedTimer())
+    await seedCompletion([USER_A, USER_B])
+    await assertFails(groupQuery(USER_A, { memberFilter: false }).get())
+  })
+
+  it('C19: the group query is participant-scoped across rooms even without an activityId filter', async () => {
+    await seedRoom([USER_A, USER_B], completedTimer())
+    await seedCompletion([USER_A, USER_B])
+    // A second, unrelated room + evidence owned by OUTSIDER only.
+    await seedRoom([OUTSIDER], completedTimer(), 'roomZz', 'ZZ2345')
+    await seedCompletion([OUTSIDER], 'roomZz', 'compZz', undefined, 'ZZ2345')
+
+    const snap = await assertSucceeds(groupQuery(USER_A, { activityId: null }).get())
+    // Only A's own evidence — the rules, not the query shape, are the guard.
+    expect(snap.size).toBe(1)
+    expect(snap.docs[0]!.data().activityId).toBe(ACTIVITY_ID)
+  })
+
+  it('C20: the collection-group path never authorizes a write', async () => {
+    await seedRoom([USER_A, USER_B], runningTimer(BASE_TIME))
+    await seedCompletion([USER_A, USER_B])
+    // Outside the paired timer transition, evidence stays unwritable for every
+    // identity — unchanged by the added read path.
+    await assertFails(
+      client(USER_A).firestore().doc(`rooms/${ROOM_ID}/completions/${COMPLETION_ID}`).set(
+        {
+          completedAt: serverTimestamp(),
+          durationSeconds: 1500,
+          memberIds: [USER_A, USER_B],
+          roomCode: ROOM_CODE,
+          activityId: ACTIVITY_ID,
+        },
+        { merge: true },
+      ),
+    )
+    await assertFails(
+      client(OUTSIDER).firestore().doc(`rooms/${ROOM_ID}/completions/newOne`).set({
+        completedAt: serverTimestamp(),
+        durationSeconds: 1500,
+        memberIds: [OUTSIDER],
+        roomCode: ROOM_CODE,
+        activityId: ACTIVITY_ID,
+      }),
+    )
+  })
+})

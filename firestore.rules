@@ -361,6 +361,34 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
+    // Collection-group read path for completion evidence (Phase 10.7)
+    // ------------------------------------------------------------------
+    // An activity aggregates completions across ALL of its rooms, so the
+    // statistics data layer reads evidence with ONE collectionGroup query
+    // over `completions` (activityId == X AND memberIds array-contains self).
+    // Firestore only authorizes a collection group query through a
+    // RECURSIVE-WILDCARD rule path — the nested rooms/{roomId}/completions
+    // rule above covers single-document reads and writes but yields "no
+    // matching allow statements" for collection group queries (verified
+    // against the emulator).
+    //
+    // This rule grants EXACTLY the authority of the nested rule's
+    // historical-participant branch: the caller must be listed in the
+    // evidence document's OWN memberIds. It adds no membership-widening and
+    // is not a filter bypass — a collection group query must still carry the
+    // `memberIds array-contains <uid>` constraint to be provable, so nobody
+    // can enumerate evidence they never participated in (verified: dropping
+    // the constraint is denied).
+    //
+    // No write branch: authoring evidence still requires the nested
+    // paired-batch rule above (running -> completed transition in the same
+    // commit), so existence of this path cannot be used to forge evidence.
+    match /{path=**}/completions/{completionId} {
+      allow read: if signedIn()
+        && request.auth.uid in resource.data.memberIds;
+    }
+
+    // ------------------------------------------------------------------
     // users/{userId}/sessions/{sessionId} — Personal study session history
     // ------------------------------------------------------------------
     match /users/{userId}/sessions/{sessionId} {

@@ -20,6 +20,7 @@ import {
   adminListDocs,
   adminSetDoc,
   assertIntegrationEnvironment,
+  clearAuthUser,
   resetIntegrationState,
   signInAs,
   USER_A,
@@ -477,39 +478,86 @@ describe('Multi-user', () => {
 // ---------------------------------------------------------------------------
 
 describe('Room deletion independence', () => {
-  async function realRoomWithCompletion(): Promise<{ roomId: string; activityId: string }> {
-    const { createRoom, leaveRoom } = await import('../../src/services/rooms')
+  /**
+   * Creates a REAL room (real service → activity + room + code), runs a REAL
+   * timer completion through the rules (evidence is born with the room's
+   * activityId in the same atomic batch), and returns the ids. Membership is
+   * intentionally left INTACT so the activity stays client-readable — the
+   * final-leave path deliberately empties the activity (see the boundary test
+   * below), which is a membership fact, not a statistics fact.
+   */
+  async function realRoomWithCompletion(): Promise<{
+    roomId: string
+    roomCode: string
+    activityId: string
+  }> {
+    const { createRoom } = await import('../../src/services/rooms')
     const { completeTimerIfDue } = await import('../../src/services/timer')
     const { adminSeedRoomTimer } = await import('./helpers')
     await signInAs(USER_A)
-    const { roomId, activityId } = await createRoom('Solo')
-    await adminSeedRoomTimer(roomId, {
+    const room = await createRoom('Solo')
+    await adminSeedRoomTimer(room.roomId, {
       status: 'running',
       remainingSeconds: 1500,
       transitionedAtIso: '2026-01-01T00:00:00.000Z',
     })
-    await completeTimerIfDue(roomId)
-    await leaveRoom(roomId) // sole member → room + code deleted; activity emptied
-    return { roomId, activityId }
+    await completeTimerIfDue(room.roomId)
+    return room
   }
 
   it('31+32+33: the activity total survives room deletion via completion evidence', async () => {
-    const { roomId, activityId } = await realRoomWithCompletion()
-
-    // Room + code gone, activity retained.
-    expect(await adminGetDoc(`rooms/${roomId}`)).toBeNull()
-    const activity = await adminGetDoc(`activities/${activityId}`)
-    expect(activity).not.toBeNull()
-
-    // Historical completion still contributes; totals do not depend on the room.
-    // (The member-only activity read requires current membership; after the
-    //  leave the activity is empty, so re-join as a member to read statistics.)
+    const { roomId, roomCode, activityId } = await realRoomWithCompletion()
+    expect(await adminListDocs(`rooms/${roomId}/completions`)).toHaveLength(1)
     await signInAs(USER_A)
-    await joinActivity(activityId)
+    expect((await getActivitySummary(activityId)).totalFocusSeconds).toBe(1500)
+
+    // Delete the room: this is the end state the client's final-leave path
+    // produces (room doc + roomCodes doc gone; the activity document is never
+    // deleted — rules forbid it).
+    await adminDeleteDoc(`rooms/${roomId}`)
+    await adminDeleteDoc(`roomCodes/${roomCode}`)
+    expect(await adminGetDoc(`rooms/${roomId}`)).toBeNull()
+    expect(await adminGetDoc(`roomCodes/${roomCode}`)).toBeNull()
+
+    // The activity and its immutable evidence outlive the room: the room is
+    // NOT the activity's identity, and the total never depends on it.
+    expect(await adminGetDoc(`activities/${activityId}`)).not.toBeNull()
+    expect(await adminListDocs(`rooms/${roomId}/completions`)).toHaveLength(1)
+
+    await signInAs(USER_A)
     const summary = await getActivitySummary(activityId)
+    expect(summary.activityId).toBe(activityId)
     expect(summary.totalFocusSeconds).toBe(1500)
     expect(summary.studyDays).toBe(1)
+    expect(await getActivityCompletions(activityId)).toHaveLength(1)
+    expect(await getActivityHistory(activityId)).toHaveLength(1)
+  })
+
+  it('boundary: an emptied activity keeps its evidence but is not client-readable', async () => {
+    const { leaveRoom } = await import('../../src/services/rooms')
+    const { roomId, activityId } = await realRoomWithCompletion()
+    expect((await getActivitySummary(activityId)).totalFocusSeconds).toBe(1500)
+
+    // The real final-leave path: room + code deleted, activity emptied.
+    await leaveRoom(roomId)
+    const raw = await adminGetDoc(`activities/${activityId}`)
+    expect(raw).not.toBeNull()
+    // memberIds emptied by the final leave (the REST representation omits an
+    // empty array's values).
+    const members = (raw!.fields.memberIds?.arrayValue as { values?: unknown[] } | undefined)?.values
+    expect(members ?? []).toEqual([])
     expect(await adminListDocs(`rooms/${roomId}/completions`)).toHaveLength(1)
+
+    // Documented v1 boundary: the activity read rule is member-only and the
+    // join rule requires exactly one existing member, so a 0-member activity
+    // cannot be read or re-joined by a client. The failure is a typed
+    // authorization error — NEVER an empty summary (no study data is a
+    // different fact from not being allowed to read it).
+    await signInAs(USER_A)
+    await expect(getActivitySummary(activityId)).rejects.toMatchObject({
+      name: 'ActivityError',
+      code: 'permission-denied',
+    })
   })
 })
 
@@ -524,13 +572,18 @@ describe('Persistence', () => {
     await seedOne(id, { id: 'b', duration: 600, iso: DAY2 })
     await signInAs(USER_A)
     const first = await getActivitySummary(id)
+    const firstHistory = await getActivityHistory(id)
 
-    // "Refresh": sign out and back in (new auth session), then re-query.
-    await resetIntegrationState()
+    // "Refresh": a brand-new auth session (new ID token, no client state),
+    // with the database deliberately NOT wiped — the source of truth is the
+    // persisted evidence, not anything the client remembered.
+    await clearAuthUser()
     await signInAs(USER_A)
     const second = await getActivitySummary(id)
 
     expect(second).toEqual(first)
     expect(second.totalFocusSeconds).toBe(3600)
+    expect(second.studyDays).toBe(2)
+    expect(await getActivityHistory(id)).toEqual(firstHistory)
   })
 })
