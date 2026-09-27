@@ -22,6 +22,7 @@ import { doc, setDoc } from 'firebase/firestore'
 import { app, auth, db } from '../../src/services/firebase'
 import { customTokenForUser } from './customToken'
 import {
+  adminDeleteDoc,
   adminGetDoc,
   adminListDocs,
   adminPatchFields,
@@ -141,6 +142,7 @@ export async function resetIntegrationState(): Promise<void> {
 
 export type { AdminDoc }
 export {
+  adminDeleteDoc,
   adminGetDoc,
   adminListDocs,
   adminPatchFields,

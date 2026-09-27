@@ -164,6 +164,14 @@ export async function adminSetDoc(path: string, fields: Record<string, RestValue
   }
 }
 
+/** Deletes one document with rules disabled (fixture lifecycle, e.g. room deletion). */
+export async function adminDeleteDoc(path: string): Promise<void> {
+  const res = await fetch(docUrl(path), { method: 'DELETE', headers: adminHeaders() })
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`adminDeleteDoc(${path}) failed: HTTP ${res.status} ${await res.text()}`)
+  }
+}
+
 /** Patches specific top-level fields of one document with rules disabled. */
 export async function adminPatchFields(
   path: string,

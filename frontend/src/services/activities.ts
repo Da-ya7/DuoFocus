@@ -2,12 +2,16 @@ import {
   arrayRemove,
   arrayUnion,
   collection,
+  collectionGroup,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   type Unsubscribe,
 } from 'firebase/firestore'
 import { auth, db } from './firebase'
@@ -16,7 +20,11 @@ import {
   ActivityError,
   validateActivityName,
   type Activity,
+  type ActivityCompletionRecord,
+  type ActivityHistoryEntry,
+  type ActivitySummary,
 } from '../types/activity'
+import { calculateActivityHistory, calculateActivitySummary } from '../utils/activityStats'
 import type { TimestampLike } from '../types/timer'
 
 /**
@@ -42,6 +50,8 @@ import type { TimestampLike } from '../types/timer'
  */
 
 const ACTIVITIES = 'activities'
+/** Completion evidence subcollection name (rooms/{roomId}/completions). */
+const COMPLETIONS = 'completions'
 
 // ---------------------------------------------------------------------------
 // Helpers & error mapping
@@ -262,4 +272,140 @@ export async function renameActivity(activityId: string, name: string): Promise<
   } catch (error) {
     toActivityError(error)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10.7 — Activity statistics data layer
+// ---------------------------------------------------------------------------
+//
+// The activity total is ALWAYS derived from immutable completion evidence
+// (rooms/{roomId}/completions/{completionId}); nothing is stored on the
+// activity document. Activities can span multiple rooms, so evidence is
+// retrieved with ONE collectionGroup query over `completions` filtered by
+// activityId + memberIds-array-contains-caller. The memberIds filter is both
+// required for correctness (historical-participant access) and for the
+// completion read rule to authorize the query server-side — the caller can
+// never widen it by passing an activityId. All math is delegated to the
+// already-approved pure utility (src/utils/activityStats.ts); no Firebase
+// concern enters it and no second statistics implementation exists.
+
+/**
+ * Faithful completion-evidence mapping. Raw field values are passed through
+ * UNTOUCHED: the pure utility already defines defensive handling for invalid
+ * timestamps and invalid/negative durations, so pre-sanitizing here would
+ * hide malformed evidence rather than let the approved rules decide.
+ */
+function toCompletionRecord(data: Record<string, unknown>): ActivityCompletionRecord {
+  return {
+    activityId: data.activityId as string,
+    durationSeconds: data.durationSeconds as number,
+    completedAt: data.completedAt as TimestampLike,
+  }
+}
+
+/**
+ * Confirms the activity is accessible to the caller and returns it.
+ *
+ * Authorization comes from the ACTIVITY read rule (member-only): a
+ * non-member or a missing document is denied by the rules and surfaces as a
+ * typed ActivityError. An activityId argument is never treated as proof of
+ * membership.
+ */
+async function loadAccessibleActivity(activityId: string): Promise<Activity> {
+  const activity = await getActivity(activityId)
+  if (!activity) {
+    throw new ActivityError('not-found', 'Requested activity was not found.')
+  }
+  return activity
+}
+
+/**
+ * The single authorized evidence query: collectionGroup over `completions`,
+ * filtered by activityId and by the caller's historical participation. Every
+ * returned document is authorized by the completion read rule. There is no
+ * client-side filtering and no global scan.
+ */
+async function queryActivityCompletions(
+  activityId: string,
+  uid: string,
+): Promise<ActivityCompletionRecord[]> {
+  try {
+    const completionsQuery = query(
+      collectionGroup(db, COMPLETIONS),
+      where('activityId', '==', activityId),
+      where('memberIds', 'array-contains', uid),
+    )
+    const snapshot = await getDocs(completionsQuery)
+    return snapshot.docs.map((completionDoc) =>
+      toCompletionRecord(completionDoc.data() as Record<string, unknown>),
+    )
+  } catch (error) {
+    toActivityError(error)
+  }
+}
+
+/**
+ * Lists the current user's activities (member-scoped array-contains query —
+ * the activity read rule authorizes exactly this; non-member activities are
+ * never fetched). Document IDs are preserved. Malformed documents are
+ * dropped rather than defaulted (the toActivity convention).
+ */
+export async function getActivitiesForUser(): Promise<Activity[]> {
+  const uid = requireUid()
+  try {
+    const activitiesQuery = query(
+      collection(db, ACTIVITIES),
+      where('memberIds', 'array-contains', uid),
+    )
+    const snapshot = await getDocs(activitiesQuery)
+    const activities: Activity[] = []
+    for (const activityDoc of snapshot.docs) {
+      const activity = toActivity(activityDoc.id, activityDoc.data() as Record<string, unknown>)
+      if (activity) {
+        activities.push(activity)
+      }
+    }
+    return activities
+  } catch (error) {
+    toActivityError(error)
+  }
+}
+
+/**
+ * Retrieves the caller-authorized completion evidence for one activity.
+ * Access to the activity itself is verified first (rules-authoritative),
+ * then the member-scoped collectionGroup query returns only evidence the
+ * caller historically participated in.
+ */
+export async function getActivityCompletions(
+  activityId: string,
+): Promise<ActivityCompletionRecord[]> {
+  const uid = requireUid()
+  await loadAccessibleActivity(activityId)
+  return queryActivityCompletions(activityId, uid)
+}
+
+/**
+ * Derives the aggregated summary of one activity from immutable completion
+ * evidence. The displayed name comes from the CURRENT activity document (not
+ * from evidence), so a rename is reflected immediately while historical
+ * completions still resolve to the same activityId.
+ */
+export async function getActivitySummary(activityId: string): Promise<ActivitySummary> {
+  const uid = requireUid()
+  const activity = await loadAccessibleActivity(activityId)
+  const completions = await queryActivityCompletions(activityId, uid)
+  return calculateActivitySummary({ id: activity.id, name: activity.name }, completions)
+}
+
+/**
+ * Derives the newest-first per-day history of one activity from the SAME
+ * authorized completion evidence (no second query shape, no written history
+ * documents). Shares the single evidence-query helper above.
+ */
+export async function getActivityHistory(activityId: string): Promise<ActivityHistoryEntry[]> {
+  const uid = requireUid()
+  const activity = await loadAccessibleActivity(activityId)
+  const completions = await queryActivityCompletions(activityId, uid)
+  return calculateActivityHistory({ id: activity.id }, completions)
 }
