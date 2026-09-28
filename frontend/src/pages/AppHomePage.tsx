@@ -9,6 +9,13 @@ import {
   joinRoom,
   normalizeRoomCode,
 } from '../services/rooms'
+import {
+  classifyActiveRoomFailure,
+  initialActiveRoomLookup,
+  resolveHomeRoomEntry,
+  roomActionsEnabled,
+  type ActiveRoomLookup,
+} from '../utils/roomEntryUi'
 import { deleteUserSession, getUserSessions } from '../services/sessions'
 import { getActivitiesForUser, getActivitySummary } from '../services/activities'
 import { calculateStudyStatistics } from '../utils/stats'
@@ -39,13 +46,23 @@ export function AppHomePage() {
 
   const uid = user?.uid ?? null
 
-  // If the user already occupies an active room, surface its state instead
-  // of blindly offering another create/join round-trip.
-  const [activeRoom, setActiveRoom] = useState<{
-    roomId: string
-    roomCode: string
-  } | null>(null)
-  const [activeRoomChecked, setActiveRoomChecked] = useState(false)
+  // If the user already occupies an active room, surface its state instead of
+  // blindly offering another create/join round-trip.
+  //
+  // UX-002: this used to be `activeRoom: Room | null` plus a separate
+  // `activeRoomChecked` flag. The create/join controls were gated only on
+  // `activeRoom`, so they were fully actionable while the lookup was still
+  // pending, and a 'taken' rejection (more than one room) was swallowed into
+  // `setActiveRoom(null)` — silently re-offering create/join to a user who
+  // already had a room. The lookup is now one explicit state whose UI is
+  // derived purely (src/utils/roomEntryUi.ts): pending and failed states
+  // expose no create/join action at all.
+  const [activeRoomLookup, setActiveRoomLookup] = useState<ActiveRoomLookup>(
+    initialActiveRoomLookup,
+  )
+  // Bumped by the recovery panel's "Check again" action; re-runs the single
+  // lookup path used by mount and auth changes.
+  const [activeRoomLookupAttempt, setActiveRoomLookupAttempt] = useState(0)
 
   // Personal study sessions & statistics state
   const [sessions, setSessions] = useState<StudySession[]>([])
@@ -61,24 +78,37 @@ export function AppHomePage() {
   const [activitiesError, setActivitiesError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!uid) return
     let cancelled = false
+    // Fresh, unresolved state for THIS user and THIS attempt: a logout or user
+    // switch can never inherit the previous user's resolved room, and a retry
+    // never shows stale data while it is in flight.
+    setActiveRoomLookup(initialActiveRoomLookup())
+    if (!uid) return
+
     findActiveRoomForUser(uid)
       .then((room) => {
-        if (!cancelled) {
-          setActiveRoom(room ? { roomId: room.id, roomCode: room.roomCode } : null)
-        }
+        if (cancelled) return
+        setActiveRoomLookup(
+          room
+            ? { status: 'found', roomId: room.id, roomCode: room.roomCode }
+            : { status: 'none' },
+        )
       })
-      .catch(() => {
-        if (!cancelled) setActiveRoom(null)
-      })
-      .finally(() => {
-        if (!cancelled) setActiveRoomChecked(true)
+      .catch((lookupError) => {
+        if (cancelled) return
+        // UX-002: 'taken' (the account occupies more than one room) is kept as
+        // its own state with its own message — it is never downgraded to "no
+        // room" and never to the generic failure. Anything unexpected keeps
+        // the existing generic message.
+        setActiveRoomLookup({
+          status: 'unavailable',
+          reason: classifyActiveRoomFailure(lookupError),
+        })
       })
     return () => {
       cancelled = true
     }
-  }, [uid])
+  }, [uid, activeRoomLookupAttempt])
 
   useEffect(() => {
     if (!uid) {
@@ -164,6 +194,17 @@ export function AppHomePage() {
 
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
 
+  // UX-002: the room-entry area is a pure function of the lookup state, and
+  // one flag decides whether any create/join action may run.
+  const roomEntry = useMemo(() => resolveHomeRoomEntry(activeRoomLookup), [activeRoomLookup])
+  const { activeRoom } = roomEntry
+  const actionsEnabled = roomActionsEnabled(roomEntry, busy !== null)
+
+  const retryActiveRoomLookup = () => {
+    setError(null)
+    setActiveRoomLookupAttempt((attempt) => attempt + 1)
+  }
+
   const handleDeleteSession = async (sessionId: string) => {
     setDeleteError(null)
     setDeletingSessionId(sessionId)
@@ -192,6 +233,9 @@ export function AppHomePage() {
   }
 
   const handleCreate = async () => {
+    // Belt and braces: the control is not rendered unless the lookup resolved
+    // with no room, and this guard keeps a stray programmatic click inert too.
+    if (!actionsEnabled) return
     setError(null)
     setBusy('create')
     try {
@@ -208,7 +252,7 @@ export function AppHomePage() {
 
   const handleJoin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    if (!codeIsValid || busy) return
+    if (!actionsEnabled || !codeIsValid) return
     setError(null)
     setBusy('join')
     try {
@@ -223,7 +267,14 @@ export function AppHomePage() {
       }
       setError('Joined the room, but its page could not be opened. Try again.')
     } catch (err) {
-      setError(friendlyRoomError(err))
+      // UX-002: the post-join re-lookup can surface 'taken' (the account now
+      // occupies two rooms). That is its own state with its own message and
+      // recovery — never a generic failure.
+      if (classifyActiveRoomFailure(err) === 'multiple-rooms') {
+        setActiveRoomLookup({ status: 'unavailable', reason: 'multiple-rooms' })
+      } else {
+        setError(friendlyRoomError(err))
+      }
     } finally {
       setBusy(null)
     }
@@ -251,7 +302,7 @@ export function AppHomePage() {
           </div>
         )}
 
-        {activeRoom ? (
+        {roomEntry.panel === 'active-room' && activeRoom && (
           <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Your active room
@@ -267,7 +318,31 @@ export function AppHomePage() {
               Re-enter room
             </button>
           </div>
-        ) : (
+        )}
+
+        {roomEntry.panel === 'checking' && (
+          <div className="mt-6 rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-sm text-slate-400">
+            Checking your rooms…
+          </div>
+        )}
+
+        {roomEntry.panel === 'recovery' && (
+          <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-center">
+            <p role="alert" className="text-sm text-amber-800">
+              {roomEntry.recoveryMessage}
+            </p>
+            <button
+              type="button"
+              onClick={retryActiveRoomLookup}
+              disabled={busy !== null}
+              className="mt-3 w-full rounded-lg border border-amber-300 bg-white px-4 py-2.5 text-sm font-semibold text-amber-900 shadow-sm transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Check again
+            </button>
+          </div>
+        )}
+
+        {roomEntry.panel === 'create-join' && (
           <>
             <div className="mt-6">
               <label htmlFor="room-topic" className="block text-sm font-medium text-slate-700">
@@ -281,7 +356,7 @@ export function AppHomePage() {
                 maxLength={ACTIVITY_NAME_MAX_LENGTH}
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                disabled={busy !== null}
+                disabled={!actionsEnabled}
                 placeholder="e.g. DSA"
                 className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900 disabled:opacity-50"
               />
@@ -291,7 +366,7 @@ export function AppHomePage() {
               <button
                 type="button"
                 onClick={handleCreate}
-                disabled={busy !== null}
+                disabled={!actionsEnabled}
                 className="mt-3 w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy === 'create' ? 'Creating room…' : 'Create Room'}
@@ -326,13 +401,13 @@ export function AppHomePage() {
                 maxLength={10}
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
-                disabled={busy !== null}
+                disabled={!actionsEnabled}
                 placeholder="e.g. X7K2P9"
                 className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-center font-mono text-lg font-semibold uppercase tracking-widest text-slate-900 shadow-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400 focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900 disabled:opacity-50"
               />
               <button
                 type="submit"
-                disabled={busy !== null || !codeIsValid}
+                disabled={!actionsEnabled || !codeIsValid}
                 className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy === 'join' ? 'Joining…' : 'Join Room'}
@@ -420,9 +495,6 @@ export function AppHomePage() {
         </button>
       </div>
 
-      {!activeRoomChecked && (
-        <p className="text-xs text-slate-400">Checking your rooms…</p>
-      )}
     </section>
   )
 }
