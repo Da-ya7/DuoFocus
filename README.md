@@ -138,6 +138,10 @@ firebase deploy --only firestore:rules
 
 The rules enforce: member-only room reads, join only into a one-member room by adding your own UID, leave only by removing your own UID, immutable `ownerId`/`roomCode`/`createdAt`, a hard two-member cap, and room↔roomCode documents that can only be created or deleted together (no orphaned codes).
 
+### Firestore Indexes
+
+Activity statistics read completion evidence across all rooms with a collection-group query filtered on `activityId`, which requires the collection-group index declared in [`firestore.indexes.json`](firestore.indexes.json). The index is configured in the repository but **has not yet been deployed to production** — deploying it (`firebase deploy --only firestore:indexes`, after `firebase login`) remains a pending, explicitly approved deployment step. Activity statistics queries work against the emulator, which does not enforce production index requirements; they will fail against production Firestore until the index is deployed.
+
 ### Verify the Installation
 
 | Service | URL | Expected |
