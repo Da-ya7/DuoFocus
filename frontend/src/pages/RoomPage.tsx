@@ -19,6 +19,7 @@ import type { Activity } from '../types/activity'
 import { DEFAULT_DURATION_SECONDS, type TimerStatus } from '../types/timer'
 import { friendlyTimerError } from '../services/timerErrors'
 import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
+import { syncMissedRoomCompletions } from '../services/sessions'
 import type { PresenceStatus, RoomPresence } from '../types/presence'
 import { PartnerPresence } from '../components/room/PartnerPresence'
 import { formatClock } from '../utils/time'
@@ -81,14 +82,37 @@ export function RoomPage() {
   // Completion guard: only one in-flight completion attempt per expiry.
   const completingRef = useRef(false)
 
+  // UX-001: personal-session materialization trigger. The session service is
+  // the only writer (deterministic `${roomId}_${completionId}` IDs plus a
+  // per-completion existence check), so invoking it here can never duplicate
+  // sessions. lastTimerStatusRef gates the trigger to observed transitions
+  // INTO 'completed' — the completing client, the partner's client, a page
+  // refresh, and a later re-entry all qualify, while an already-completed
+  // snapshot stream does not re-trigger. In-flight guard avoids overlap.
+  const lastTimerStatusRef = useRef<TimerStatus | null>(null)
+  const sessionSyncInFlightRef = useRef(false)
+  const [sessionSyncError, setSessionSyncError] = useState<string | null>(null)
+
   useEffect(() => {
     if (!roomId || !uid) return
+
+    // Per-room lifecycle: the completion-observation gate starts fresh.
+    lastTimerStatusRef.current = null
 
     const unsubscribe = subscribeToRoom(
       roomId,
       (nextRoom) => {
         setRoom(nextRoom)
         setListenerError(null)
+        // UX-001: on every observed transition into 'completed', materialize
+        // the signed-in user's personal sessions from the room's immutable
+        // completion evidence. Idempotent; failures are non-fatal.
+        const nextStatus = nextRoom.timer?.status ?? null
+        const previousStatus = lastTimerStatusRef.current
+        lastTimerStatusRef.current = nextStatus
+        if (nextStatus === 'completed' && previousStatus !== 'completed') {
+          void syncSessionsForRoom(roomId)
+        }
       },
       () => {
         // Member-only read rejected (stale/invalid id) — friendly state.
@@ -251,6 +275,24 @@ export function RoomPage() {
     const interval = window.setInterval(() => setTick((t) => t + 1), TICK_MS)
     return () => window.clearInterval(interval)
   }, [room?.timer?.status])
+
+  // Best-effort personal-session sync (UX-001). Failure never touches the
+  // timer or the completion evidence — both are already committed and
+  // authoritative; any later sync (refresh, re-entry) recovers the session.
+  const syncSessionsForRoom = useCallback(async (targetRoomId: string) => {
+    if (sessionSyncInFlightRef.current) return
+    sessionSyncInFlightRef.current = true
+    setSessionSyncError(null)
+    try {
+      await syncMissedRoomCompletions(targetRoomId)
+    } catch {
+      setSessionSyncError(
+        'Your personal session could not be recorded. It will sync next time you open this room.',
+      )
+    } finally {
+      sessionSyncInFlightRef.current = false
+    }
+  }, [])
 
   const runTimerAction = useCallback(
     async (action: 'start' | 'pause' | 'resume' | 'reset') => {
@@ -430,6 +472,16 @@ export function RoomPage() {
           </p>
         )}
       </div>
+
+      {/* ---------- UX-001: non-fatal personal-session sync failure ---------- */}
+      {sessionSyncError && (
+        <div
+          role="alert"
+          className="mt-4 w-full max-w-md rounded-lg border border-red-200 bg-red-50 p-3 text-center text-xs text-red-700"
+        >
+          {sessionSyncError}
+        </div>
+      )}
 
       {/* ---------- Room code + members ---------- */}
       <div className="mt-8 w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
