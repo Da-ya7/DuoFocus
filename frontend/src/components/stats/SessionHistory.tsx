@@ -1,9 +1,27 @@
+import { useEffect, useRef } from 'react'
 import type { StudySession } from '../../types/session'
 import type { TimestampLike } from '../../types/timer'
+import {
+  canCancelSessionDelete,
+  canConfirmSessionDelete,
+  sessionDeleteLabels,
+  sessionDeletePhase,
+} from '../../utils/destructiveActionUi'
 
 export interface SessionHistoryProps {
   sessions: readonly StudySession[]
-  onDelete?: (sessionId: string) => void | Promise<void>
+  /**
+   * Opens the inline confirmation for one session. This NEVER deletes — the
+   * destructive call happens only from `onConfirmDelete` (UX-004).
+   */
+  onRequestDelete?: (sessionId: string) => void
+  /** Runs the existing deletion service. Only offered inside the confirmation. */
+  onConfirmDelete?: (sessionId: string) => void | Promise<void>
+  /** Closes the confirmation without deleting. */
+  onCancelDelete?: () => void
+  /** The session whose confirmation is open (at most one at a time). */
+  confirmingSessionId?: string | null
+  /** The session whose deletion is currently in flight. */
   deletingSessionId?: string | null
 }
 
@@ -48,15 +66,44 @@ function formatDuration(seconds: number): string {
 }
 
 /**
- * Presentational session history list — Phase 6.7.
- * Displays completed study sessions with authoritative timestamp, duration, room code,
- * and individual deletion triggers.
+ * Presentational session history list — Phase 6.7; confirmation in Phase 11.4.
+ *
+ * Displays completed study sessions with authoritative timestamp, duration,
+ * room code, and a two-step deletion flow: the first click only opens an
+ * inline confirmation; only its Delete control runs the deletion. The
+ * confirmation state itself is owned by the page (it is the side that knows
+ * whether the deletion succeeded), so this component stays presentational and
+ * derives each row's phase from the two ids it receives.
  */
 export function SessionHistory({
   sessions,
-  onDelete,
+  onRequestDelete,
+  onConfirmDelete,
+  onCancelDelete,
+  confirmingSessionId,
   deletingSessionId,
 }: SessionHistoryProps) {
+  const cancelRef = useRef<HTMLButtonElement | null>(null)
+  const requestRef = useRef<HTMLButtonElement | null>(null)
+  const wasConfirmingRef = useRef(false)
+
+  // Keyboard flow: opening the confirmation moves focus to Cancel (so the
+  // destructive control is never the default next action), and closing it —
+  // by Cancel, or because a delete attempt failed — returns focus to the row's
+  // Delete control. No focus trap is introduced: Tab keeps moving through the
+  // page normally.
+  useEffect(() => {
+    const wasConfirming = wasConfirmingRef.current
+    wasConfirmingRef.current = !!confirmingSessionId
+    if (confirmingSessionId) {
+      cancelRef.current?.focus()
+      return
+    }
+    if (wasConfirming) {
+      requestRef.current?.focus()
+    }
+  }, [confirmingSessionId])
+
   if (sessions.length === 0) {
     return (
       <div className="rounded-lg border border-slate-100 bg-slate-50/80 p-4 text-center text-xs text-slate-400">
@@ -65,11 +112,14 @@ export function SessionHistory({
     )
   }
 
+  const canDelete = !!onRequestDelete && !!onConfirmDelete
+
   return (
     <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
       {sessions.map((session) => {
-        const isDeleting = deletingSessionId === session.id
         const dateString = formatCompletedAt(session.completedAt)
+        const phase = sessionDeletePhase(session.id, confirmingSessionId, deletingSessionId)
+        const labels = sessionDeleteLabels(dateString)
 
         return (
           <li
@@ -86,17 +136,48 @@ export function SessionHistory({
               </span>
             </div>
 
-            {onDelete && (
-              <div className="flex items-center justify-end">
-                <button
-                  type="button"
-                  onClick={() => onDelete(session.id)}
-                  disabled={isDeleting}
-                  aria-label={`Delete study session from ${dateString}`}
-                  className="rounded px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isDeleting ? 'Deleting…' : 'Delete'}
-                </button>
+            {canDelete && (
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {phase === 'idle' ? (
+                  <button
+                    ref={requestRef}
+                    type="button"
+                    onClick={() => onRequestDelete?.(session.id)}
+                    aria-label={labels.request}
+                    className="rounded px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 hover:text-red-700"
+                  >
+                    Delete
+                  </button>
+                ) : (
+                  <div
+                    role="group"
+                    aria-label={labels.prompt}
+                    className="flex flex-wrap items-center justify-end gap-2"
+                  >
+                    <span className="text-xs font-medium text-slate-600">
+                      {labels.visiblePrompt}
+                    </span>
+                    <button
+                      ref={cancelRef}
+                      type="button"
+                      onClick={() => onCancelDelete?.()}
+                      disabled={!canCancelSessionDelete(phase)}
+                      aria-label={labels.cancel}
+                      className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onConfirmDelete?.(session.id)}
+                      disabled={!canConfirmSessionDelete(phase)}
+                      aria-label={labels.confirm}
+                      className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {phase === 'deleting' ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </li>

@@ -1,5 +1,5 @@
 import type React from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
@@ -70,6 +70,12 @@ export function AppHomePage() {
   const [statsError, setStatsError] = useState<string | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  // UX-004: the session whose inline confirmation is open (at most one). The
+  // first Delete click only sets this — it never calls the service.
+  const [confirmingSessionId, setConfirmingSessionId] = useState<string | null>(null)
+  // Airtight duplicate-submission guard: state updates are async, so a
+  // same-tick double confirmation could otherwise start two deletions.
+  const deleteInFlightRef = useRef(false)
 
   // Persistent study activities (Phase 10.8): names + shared focus totals
   // come from the Phase 10.7 statistics data layer — never computed here.
@@ -205,16 +211,36 @@ export function AppHomePage() {
     setActiveRoomLookupAttempt((attempt) => attempt + 1)
   }
 
+  // UX-004: first click — open the confirmation. Deletes nothing.
+  const handleRequestDeleteSession = (sessionId: string) => {
+    setDeleteError(null)
+    setConfirmingSessionId(sessionId)
+  }
+
+  // UX-004: Cancel — close the confirmation. Deletes nothing.
+  const handleCancelDeleteSession = () => {
+    setConfirmingSessionId(null)
+  }
+
+  // UX-004: confirm — the ONLY path to the existing deletion service.
   const handleDeleteSession = async (sessionId: string) => {
+    if (deleteInFlightRef.current) return
+    deleteInFlightRef.current = true
     setDeleteError(null)
     setDeletingSessionId(sessionId)
     try {
       await deleteUserSession(sessionId)
       setSessions((prev) => prev.filter((s) => s.id !== sessionId))
+      setConfirmingSessionId(null)
     } catch {
+      // Failure: the row is preserved, the existing friendly error is shown,
+      // and the confirmation closes so the user is back in a safe state and
+      // can retry from a fresh confirmation.
       setDeleteError('Could not delete this session. Please try again.')
+      setConfirmingSessionId(null)
     } finally {
       setDeletingSessionId(null)
+      deleteInFlightRef.current = false
     }
   }
 
@@ -454,7 +480,10 @@ export function AppHomePage() {
 
               <SessionHistory
                 sessions={sessions}
-                onDelete={handleDeleteSession}
+                onRequestDelete={handleRequestDeleteSession}
+                onConfirmDelete={handleDeleteSession}
+                onCancelDelete={handleCancelDeleteSession}
+                confirmingSessionId={confirmingSessionId}
                 deletingSessionId={deletingSessionId}
               />
             </div>

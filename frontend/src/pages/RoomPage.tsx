@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { leaveRoom, subscribeToRoom } from '../services/rooms'
+import { describeLeaveRoom } from '../utils/destructiveActionUi'
 import { renameActivity, subscribeToActivity } from '../services/activities'
 import { ActivityHeader } from '../components/activity/ActivityHeader'
 import {
@@ -57,6 +58,13 @@ export function RoomPage() {
   const [listenerError, setListenerError] = useState<string | null>(null)
   const [leaving, setLeaving] = useState(false)
   const [leaveError, setLeaveError] = useState<string | null>(null)
+  // UX-018: the leave confirmation is open (the first click only opens it).
+  const [confirmingLeave, setConfirmingLeave] = useState(false)
+  // Airtight duplicate-submission guard for the leave call.
+  const leaveInFlightRef = useRef(false)
+  const leaveCancelRef = useRef<HTMLButtonElement | null>(null)
+  const leaveRequestRef = useRef<HTMLButtonElement | null>(null)
+  const wasConfirmingLeaveRef = useRef(false)
   const [presenceList, setPresenceList] = useState<RoomPresence[]>([])
 
   // Phase 10.8: the room's persistent activity (WHAT is being studied). The
@@ -322,18 +330,51 @@ export function RoomPage() {
     await renameActivity(targetActivityId, name)
   }, [])
 
+  // UX-018: first click — open the confirmation. Leaves nothing.
+  const handleRequestLeave = () => {
+    setLeaveError(null)
+    setConfirmingLeave(true)
+  }
+
+  // UX-018: Cancel — close the confirmation. Leaves nothing.
+  const handleCancelLeave = () => {
+    setConfirmingLeave(false)
+  }
+
+  // UX-018: confirm — the ONLY path to the existing leave service.
   const handleLeave = async () => {
-    if (!roomId || leaving) return
+    if (!roomId || leaving || leaveInFlightRef.current) return
+    leaveInFlightRef.current = true
     setLeaving(true)
     setLeaveError(null)
     try {
       await leaveRoom(roomId)
       navigate('/app', { replace: true })
     } catch {
+      // Failure: stay on the room page, keep the room state, show the existing
+      // friendly error, and close the confirmation so the user can retry.
       setLeaveError('Could not leave the room. Please try again.')
       setLeaving(false)
+      setConfirmingLeave(false)
+    } finally {
+      leaveInFlightRef.current = false
     }
   }
+
+  // UX-018: keyboard flow for the leave confirmation — focus moves to Cancel
+  // when it opens and returns to Leave Room when it closes (cancel or failed
+  // leave). No focus trap is introduced.
+  useEffect(() => {
+    const wasConfirming = wasConfirmingLeaveRef.current
+    wasConfirmingLeaveRef.current = confirmingLeave
+    if (confirmingLeave) {
+      leaveCancelRef.current?.focus()
+      return
+    }
+    if (wasConfirming) {
+      leaveRequestRef.current?.focus()
+    }
+  }, [confirmingLeave])
 
   if (!roomId || !uid) {
     return (
@@ -371,6 +412,11 @@ export function RoomPage() {
   const isMember = room.memberIds.includes(uid)
   const members = [...room.memberIds]
   const waiting = members.length < ROOM_MAX_MEMBERS
+  // UX-018: what leaving will actually do, derived from the LIVE room snapshot
+  // the page already holds (no extra membership query). Recomputing it every
+  // render keeps the warning truthful if membership changes while the
+  // confirmation is open.
+  const leaveConsequences = describeLeaveRoom(room.memberIds, uid)
 
   // ---- Partner presence derivation (Phase 7.6) ----
   const partnerUid = room.memberIds.find((id) => id !== uid) ?? null
@@ -532,14 +578,47 @@ export function RoomPage() {
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={handleLeave}
-          disabled={leaving || !isMember}
-          className="mt-8 w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {leaving ? 'Leaving…' : 'Leave Room'}
-        </button>
+        {!confirmingLeave ? (
+          <button
+            ref={leaveRequestRef}
+            type="button"
+            onClick={handleRequestLeave}
+            disabled={leaving || !isMember}
+            className="mt-8 w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {leaving ? 'Leaving…' : 'Leave Room'}
+          </button>
+        ) : (
+          <div
+            role="group"
+            aria-label={leaveConsequences.prompt}
+            className="mt-8 rounded-lg border border-amber-200 bg-amber-50 p-4 text-left"
+          >
+            <p className="text-sm font-semibold text-amber-900">{leaveConsequences.prompt}</p>
+            <p className="mt-1 text-xs text-amber-800">{leaveConsequences.message}</p>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <button
+                ref={leaveCancelRef}
+                type="button"
+                onClick={handleCancelLeave}
+                disabled={leaving}
+                aria-label={leaveConsequences.cancelLabel}
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleLeave}
+                disabled={leaving}
+                aria-label={leaveConsequences.confirmLabel}
+                className="w-full rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {leaving ? 'Leaving…' : leaveConsequences.confirmLabel}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   )
