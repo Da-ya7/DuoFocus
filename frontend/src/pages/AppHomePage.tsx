@@ -24,6 +24,12 @@ import {
   activityNamesById,
   type SessionActivityLookup,
 } from '../utils/activityContextUi'
+import {
+  RETRY_LABEL,
+  claimRetry,
+  releaseRetry,
+  type RetryGuardRef,
+} from '../utils/dataRetryUi'
 import { StatsSummary } from '../components/stats/StatsSummary'
 import { SessionHistory } from '../components/stats/SessionHistory'
 import { ActivityList, type ActivityListItem } from '../components/activity/ActivityList'
@@ -81,11 +87,22 @@ export function AppHomePage() {
   // same-tick double confirmation could otherwise start two deletions.
   const deleteInFlightRef = useRef(false)
 
+  // UX-007: retry affordances for the two INDEPENDENT Home loads. Each section
+  // owns its own attempt counter, so retrying one re-runs only ITS existing
+  // effect (mirroring the Phase 11.3 active-room "Check again" pattern) and the
+  // other section's already-loaded data is preserved. The guard closes the
+  // window between a retry click and the re-render that swaps the error panel
+  // for the existing loading panel.
+  const statsRetryGuardRef = useRef<RetryGuardRef>({ current: false })
+  const [statsAttempt, setStatsAttempt] = useState(0)
+
   // Persistent study activities (Phase 10.8): names + shared focus totals
   // come from the Phase 10.7 statistics data layer — never computed here.
   const [activities, setActivities] = useState<ActivityListItem[]>([])
   const [activitiesLoading, setActivitiesLoading] = useState(true)
   const [activitiesError, setActivitiesError] = useState<string | null>(null)
+  const activitiesRetryGuardRef = useRef<RetryGuardRef>({ current: false })
+  const [activitiesAttempt, setActivitiesAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -120,9 +137,13 @@ export function AppHomePage() {
     }
   }, [uid, activeRoomLookupAttempt])
 
+  // One load feeds BOTH Study Statistics and Study History (the existing
+  // combined architecture — preserved, not redesigned), so its retry re-runs
+  // exactly this one getUserSessions() call and restores both.
   useEffect(() => {
     if (!uid) {
       setStatsLoading(false)
+      releaseRetry(statsRetryGuardRef.current)
       return
     }
     let cancelled = false
@@ -141,6 +162,9 @@ export function AppHomePage() {
         }
       })
       .finally(() => {
+        // Released on EVERY settle path (success, failure, and cancelled) so a
+        // later retry after a further failure is always allowed.
+        releaseRetry(statsRetryGuardRef.current)
         if (!cancelled) {
           setStatsLoading(false)
         }
@@ -149,11 +173,12 @@ export function AppHomePage() {
     return () => {
       cancelled = true
     }
-  }, [uid])
+  }, [uid, statsAttempt])
 
   useEffect(() => {
     if (!uid) {
       setActivitiesLoading(false)
+      releaseRetry(activitiesRetryGuardRef.current)
       return
     }
     let cancelled = false
@@ -192,6 +217,8 @@ export function AppHomePage() {
         }
       })
       .finally(() => {
+        // Same rule as the sessions load above: always release the guard.
+        releaseRetry(activitiesRetryGuardRef.current)
         if (!cancelled) {
           setActivitiesLoading(false)
         }
@@ -200,7 +227,7 @@ export function AppHomePage() {
     return () => {
       cancelled = true
     }
-  }, [uid])
+  }, [uid, activitiesAttempt])
 
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
 
@@ -229,6 +256,19 @@ export function AppHomePage() {
   const retryActiveRoomLookup = () => {
     setError(null)
     setActiveRoomLookupAttempt((attempt) => attempt + 1)
+  }
+
+  // UX-007: re-run ONLY the failed Home load. Each guard drops every repeat
+  // click while an attempt is in flight; the section's existing loading panel
+  // takes over as soon as the attempt starts.
+  const handleRetryStats = () => {
+    if (!claimRetry(statsRetryGuardRef.current)) return
+    setStatsAttempt((attempt) => attempt + 1)
+  }
+
+  const handleRetryActivities = () => {
+    if (!claimRetry(activitiesRetryGuardRef.current)) return
+    setActivitiesAttempt((attempt) => attempt + 1)
   }
 
   // UX-004: first click — open the confirmation. Deletes nothing.
@@ -472,11 +512,18 @@ export function AppHomePage() {
               Loading statistics…
             </div>
           ) : statsError ? (
-            <div
-              role="alert"
-              className="rounded-lg border border-red-200 bg-red-50 p-3 text-center text-xs text-red-700"
-            >
-              {statsError}
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-center">
+              <p role="alert" className="text-xs text-red-700">
+                {statsError}
+              </p>
+              <button
+                type="button"
+                onClick={handleRetryStats}
+                disabled={statsLoading}
+                className="mt-2 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {RETRY_LABEL}
+              </button>
             </div>
           ) : (
             <StatsSummary statistics={statistics} />
@@ -521,11 +568,18 @@ export function AppHomePage() {
               Loading activities…
             </div>
           ) : activitiesError ? (
-            <div
-              role="alert"
-              className="rounded-lg border border-red-200 bg-red-50 p-3 text-center text-xs text-red-700"
-            >
-              {activitiesError}
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-center">
+              <p role="alert" className="text-xs text-red-700">
+                {activitiesError}
+              </p>
+              <button
+                type="button"
+                onClick={handleRetryActivities}
+                disabled={activitiesLoading}
+                className="mt-2 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {RETRY_LABEL}
+              </button>
             </div>
           ) : (
             <ActivityList

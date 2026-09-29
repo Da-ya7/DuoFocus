@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
@@ -15,6 +15,12 @@ import {
   formatStudyDayCount,
   friendlyActivityError,
 } from '../utils/activityUi'
+import {
+  RETRY_LABEL,
+  claimRetry,
+  releaseRetry,
+  type RetryGuardRef,
+} from '../utils/dataRetryUi'
 
 /**
  * One activity's aggregated view — Phase 10.8 (data layer from Phase 10.7).
@@ -40,9 +46,15 @@ export function ActivityDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
 
+  // UX-008: same-tick guard for the retry control. A failed load leaves this
+  // page parked in its error state, so without the guard a rapid repeat click
+  // could queue more than one re-run of the same load.
+  const retryGuardRef = useRef<RetryGuardRef>({ current: false })
+
   useEffect(() => {
     if (!activityId || !uid) {
       setLoading(false)
+      releaseRetry(retryGuardRef.current)
       return
     }
     let cancelled = false
@@ -66,6 +78,9 @@ export function ActivityDetailPage() {
         }
       })
       .finally(() => {
+        // Released on EVERY settle path (success, failure, and cancelled) so a
+        // later retry after a further failure is always allowed again.
+        releaseRetry(retryGuardRef.current)
         if (!cancelled) {
           setLoading(false)
         }
@@ -75,6 +90,16 @@ export function ActivityDetailPage() {
       cancelled = true
     }
   }, [activityId, uid, reloadToken])
+
+  // UX-008: re-run the EXISTING load (the same summary + history pair, through
+  // the effect's existing reload mechanism) without leaving the page. The
+  // route and activityId are untouched, and the error classification is not
+  // changed — a genuinely missing or unauthorized activity simply reports the
+  // same truthful message again.
+  const handleRetry = () => {
+    if (!claimRetry(retryGuardRef.current)) return
+    setReloadToken((token) => token + 1)
+  }
 
   const handleRename = useCallback(
     async (name: string) => {
@@ -115,11 +140,18 @@ export function ActivityDetailPage() {
   if (error || !summary) {
     return (
       <section className="flex flex-1 flex-col items-center justify-center py-20 text-center">
-        <div
-          role="alert"
-          className="w-full max-w-md rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-        >
-          {error ?? 'This activity is no longer available.'}
+        <div className="w-full max-w-md rounded-lg border border-red-200 bg-red-50 p-4">
+          <p role="alert" className="text-sm text-red-700">
+            {error ?? 'This activity is no longer available.'}
+          </p>
+          <button
+            type="button"
+            onClick={handleRetry}
+            disabled={loading}
+            className="mt-3 w-full rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {RETRY_LABEL}
+          </button>
         </div>
         <Link to="/app" className="mt-4 text-sm font-semibold text-slate-900 hover:underline">
           Back to home
