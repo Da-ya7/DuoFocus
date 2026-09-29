@@ -16,8 +16,8 @@ import {
   roomActionsEnabled,
   type ActiveRoomLookup,
 } from '../utils/roomEntryUi'
-import { deleteUserSession, getUserSessions } from '../services/sessions'
-import { getActivitiesForUser, getActivitySummary } from '../services/activities'
+import { deleteUserSession, subscribeUserSessions } from '../services/sessions'
+import { subscribeToUserActivitySummaries } from '../services/activities'
 import { calculateStudyStatistics } from '../utils/stats'
 import { resolveRoomTopic } from '../utils/activityUi'
 import {
@@ -33,7 +33,7 @@ import {
 import { StatsSummary } from '../components/stats/StatsSummary'
 import { SessionHistory } from '../components/stats/SessionHistory'
 import { ActivityList, type ActivityListItem } from '../components/activity/ActivityList'
-import { ACTIVITY_NAME_MAX_LENGTH } from '../types/activity'
+import { ACTIVITY_NAME_MAX_LENGTH, type ActivitySummary } from '../types/activity'
 import { RoomError } from '../types/room'
 import type { StudySession } from '../types/session'
 
@@ -139,94 +139,95 @@ export function AppHomePage() {
 
   // One load feeds BOTH Study Statistics and Study History (the existing
   // combined architecture — preserved, not redesigned), so its retry re-runs
-  // exactly this one getUserSessions() call and restores both.
+  // exactly this one subscription and restores both.
+  //
+  // UX-016: the personal-history read is now the app's EXISTING real-time
+  // subscription (subscribeUserSessions — the same pipeline Phase 6 built for
+  // the room flow) instead of a one-shot getDocs. Study Statistics and Study
+  // History therefore stop being stale while Home stays open: a session
+  // materialized by a completion in another tab/device, or deleted elsewhere,
+  // updates this page without a reload. One subscription for this user only.
+  //
+  // Retry is unchanged: the effect's cleanup tears the previous listener down
+  // before a retry re-subscribes, so one attempt can never leave two listeners.
   useEffect(() => {
     if (!uid) {
       setStatsLoading(false)
       releaseRetry(statsRetryGuardRef.current)
       return
     }
-    let cancelled = false
     setStatsLoading(true)
     setStatsError(null)
 
-    getUserSessions()
-      .then((data) => {
-        if (!cancelled) {
-          setSessions(data)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setStatsError('Could not load your study statistics.')
-        }
-      })
-      .finally(() => {
-        // Released on EVERY settle path (success, failure, and cancelled) so a
-        // later retry after a further failure is always allowed.
+    return subscribeUserSessions(
+      (data) => {
+        setSessions(data)
+        setStatsLoading(false)
         releaseRetry(statsRetryGuardRef.current)
-        if (!cancelled) {
-          setStatsLoading(false)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
+      },
+      () => {
+        // Same friendly classification as the one-shot read had; a listener
+        // failure is never surfaced as a raw Firebase error. Retry stays
+        // available and re-subscribes.
+        setStatsError('Could not load your study statistics.')
+        setStatsLoading(false)
+        releaseRetry(statsRetryGuardRef.current)
+      },
+    )
   }, [uid, statsAttempt])
 
+  // UX-015: the activity list and its per-activity totals used to be
+  // "one list query + one summary read PER activity" (1 + 2N Firestore read
+  // operations, measured). They now come from ONE subscription that reads the
+  // member-scoped activity list plus the completion evidence of ALL of the
+  // user's activities in a single collection-group query, and derives each
+  // total with the already-approved pure utility. The cost is constant in the
+  // number of activities (⌈N/10⌉ is only the rules' document-access budget for
+  // the batched `in` query), and no counter or aggregate field was added to the
+  // activity schema.
+  //
+  // UX-016: because that read is a subscription, a rename or a shared session
+  // completed by the partner in another tab/device updates this section
+  // without a reload. Listeners are bounded (list + evidence batches), never
+  // one per activity, and the retry below re-subscribes on a clean slate.
   useEffect(() => {
     if (!uid) {
       setActivitiesLoading(false)
       releaseRetry(activitiesRetryGuardRef.current)
       return
     }
-    let cancelled = false
     setActivitiesLoading(true)
     setActivitiesError(null)
 
-    getActivitiesForUser()
-      .then(async (memberActivities) => {
-        // One summary per activity through the existing service API (each
-        // summary is derived from that activity's immutable completion
-        // evidence: shared sessions counted once, no client-side counting).
-        const summaries = await Promise.all(
-          memberActivities.map((activity) => getActivitySummary(activity.id)),
+    // Display order only: most-studied first, then by name for a stable list.
+    // No study data is derived from this ordering.
+    const toListItems = (summaries: ActivitySummary[]): ActivityListItem[] =>
+      summaries
+        .map((summary) => ({
+          id: summary.activityId,
+          name: summary.name,
+          totalFocusSeconds: summary.totalFocusSeconds,
+        }))
+        .sort(
+          (a, b) =>
+            b.totalFocusSeconds - a.totalFocusSeconds || a.name.localeCompare(b.name),
         )
-        return summaries
-          .map((summary) => ({
-            id: summary.activityId,
-            name: summary.name,
-            totalFocusSeconds: summary.totalFocusSeconds,
-          }))
-          // Display order only: most-studied first, then by name for a stable
-          // list. No study data is derived from this ordering.
-          .sort(
-            (a, b) =>
-              b.totalFocusSeconds - a.totalFocusSeconds || a.name.localeCompare(b.name),
-          )
-      })
-      .then((items) => {
-        if (!cancelled) {
-          setActivities(items)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setActivitiesError('Could not load your activities.')
-        }
-      })
-      .finally(() => {
-        // Same rule as the sessions load above: always release the guard.
-        releaseRetry(activitiesRetryGuardRef.current)
-        if (!cancelled) {
-          setActivitiesLoading(false)
-        }
-      })
 
-    return () => {
-      cancelled = true
-    }
+    return subscribeToUserActivitySummaries(
+      (summaries) => {
+        setActivities(toListItems(summaries))
+        setActivitiesLoading(false)
+        releaseRetry(activitiesRetryGuardRef.current)
+      },
+      () => {
+        // Same rule as the sessions subscription above: the friendly message
+        // is unchanged, never a raw Firebase error, and the guard is released
+        // so a later retry is always allowed.
+        setActivitiesError('Could not load your activities.')
+        setActivitiesLoading(false)
+        releaseRetry(activitiesRetryGuardRef.current)
+      },
+    )
   }, [uid, activitiesAttempt])
 
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])

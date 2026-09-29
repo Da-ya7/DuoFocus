@@ -55,22 +55,35 @@ function errorCode(error: unknown): string | undefined {
   return (error as { code?: string })?.code
 }
 
-/** Wraps unknown Firestore rejections in typed SessionError instances. */
-function toSessionError(error: unknown): never {
+/**
+ * Maps an unknown rejection to the typed SessionError it represents.
+ *
+ * Phase 11.8: factored out of toSessionError so the real-time subscription
+ * (which reports failures through a callback and cannot throw) classifies a
+ * listener failure with the SAME codes and messages as every rejecting call.
+ * Nothing changed for the throwing path — toSessionError still throws exactly
+ * what this returns.
+ */
+function sessionFailure(error: unknown): SessionError {
   if (error instanceof SessionError) {
-    throw error
+    return error
   }
   const code = errorCode(error)
   if (code === 'permission-denied') {
-    throw new SessionError('permission-denied', 'Session action rejected by security rules.')
+    return new SessionError('permission-denied', 'Session action rejected by security rules.')
   }
   if (code === 'not-found') {
-    throw new SessionError('not-found', 'Requested session record was not found.')
+    return new SessionError('not-found', 'Requested session record was not found.')
   }
   if (code === 'unavailable') {
-    throw new SessionError('unknown', 'Network unavailable. Please try again.')
+    return new SessionError('unknown', 'Network unavailable. Please try again.')
   }
-  throw new SessionError('unknown', 'Something went wrong with session history.')
+  return new SessionError('unknown', 'Something went wrong with session history.')
+}
+
+/** Wraps unknown Firestore rejections in typed SessionError instances. */
+function toSessionError(error: unknown): never {
+  throw sessionFailure(error)
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +266,11 @@ export async function getUserSessions(
 
 /**
  * Subscribes to the authenticated user's personal session history in real-time.
+ *
+ * Phase 11.8: listener failures are delivered as TYPED SessionErrors (never the
+ * SDK's raw object), so a consumer that surfaces the failure keeps the app's
+ * existing error taxonomy and never shows a raw Firebase error. The optional
+ * callback is unchanged in shape — only the classification is added.
  */
 export function subscribeUserSessions(
   onUpdate: (sessions: StudySession[]) => void,
@@ -272,7 +290,7 @@ export function subscribeUserSessions(
       const sessions = snapshot.docs.map((docSnap) => toStudySession(docSnap.id, docSnap.data()))
       onUpdate(sessions)
     },
-    onError,
+    onError ? (error) => onError(sessionFailure(error)) : undefined,
   )
 }
 
