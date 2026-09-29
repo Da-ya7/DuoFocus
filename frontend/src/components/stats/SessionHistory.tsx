@@ -7,6 +7,10 @@ import {
   sessionDeleteLabels,
   sessionDeletePhase,
 } from '../../utils/destructiveActionUi'
+import {
+  resolveSessionActivity,
+  type SessionActivityLookup,
+} from '../../utils/activityContextUi'
 
 export interface SessionHistoryProps {
   sessions: readonly StudySession[]
@@ -23,6 +27,12 @@ export interface SessionHistoryProps {
   confirmingSessionId?: string | null
   /** The session whose deletion is currently in flight. */
   deletingSessionId?: string | null
+  /**
+   * UX-014: where to read each session's CURRENT activity name from. The page
+   * supplies the already-loaded member-scoped activity list; the component does
+   * no lookup of its own. Omitted (or loading) never blocks a row.
+   */
+  activityLookup?: SessionActivityLookup
 }
 
 /**
@@ -66,14 +76,20 @@ function formatDuration(seconds: number): string {
 }
 
 /**
- * Presentational session history list — Phase 6.7; confirmation in Phase 11.4.
+ * Presentational session history list — Phase 6.7; confirmation in Phase 11.4;
+ * activity name in Phase 11.6 (UX-014).
  *
  * Displays completed study sessions with authoritative timestamp, duration,
- * room code, and a two-step deletion flow: the first click only opens an
- * inline confirmation; only its Delete control runs the deletion. The
+ * room code, and the CURRENT name of the activity the session belongs to
+ * (resolved through the page-supplied lookup — the session stores only the
+ * historical `activityId`), plus a two-step deletion flow: the first click only
+ * opens an inline confirmation; only its Delete control runs the deletion. The
  * confirmation state itself is owned by the page (it is the side that knows
  * whether the deletion succeeded), so this component stays presentational and
  * derives each row's phase from the two ids it receives.
+ *
+ * An unresolvable activity is never fatal: the row keeps its date, room code,
+ * duration, and delete controls, and shows a safe fallback label instead.
  */
 export function SessionHistory({
   sessions,
@@ -82,6 +98,7 @@ export function SessionHistory({
   onCancelDelete,
   confirmingSessionId,
   deletingSessionId,
+  activityLookup,
 }: SessionHistoryProps) {
   const cancelRef = useRef<HTMLButtonElement | null>(null)
   const requestRef = useRef<HTMLButtonElement | null>(null)
@@ -120,6 +137,9 @@ export function SessionHistory({
         const dateString = formatCompletedAt(session.completedAt)
         const phase = sessionDeletePhase(session.id, confirmingSessionId, deletingSessionId)
         const labels = sessionDeleteLabels(dateString)
+        const activity = activityLookup
+          ? resolveSessionActivity(session.activityId, activityLookup)
+          : null
 
         return (
           <li
@@ -127,6 +147,17 @@ export function SessionHistory({
             className="flex flex-col gap-2 p-3.5 sm:flex-row sm:items-center sm:justify-between"
           >
             <div className="flex flex-wrap items-center gap-2">
+              {activity && (
+                <span
+                  className={
+                    activity.pending
+                      ? 'text-xs italic text-slate-400'
+                      : 'text-xs font-semibold text-slate-800'
+                  }
+                >
+                  {activity.label}
+                </span>
+              )}
               <span className="text-xs font-medium text-slate-800">{dateString}</span>
               <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-600">
                 {session.roomCode ? `ROOM ${session.roomCode}` : 'ROOM'}

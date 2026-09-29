@@ -24,6 +24,11 @@ import {
   timerControls,
   type TimerControlAction,
 } from '../utils/completionUi'
+import {
+  ACTIVITY_DETAIL_LINK_LABEL,
+  ROOM_ACTIVITY_CONTEXT_NOTE,
+  activityDetailPath,
+} from '../utils/activityContextUi'
 import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
 import { syncMissedRoomCompletions } from '../services/sessions'
 import type { PresenceStatus, RoomPresence } from '../types/presence'
@@ -481,6 +486,23 @@ export function RoomPage() {
           </p>
         ) : (
           <p className="mt-3 text-center text-sm text-slate-400">Loading activity…</p>
+        )}
+
+        {/* UX-005 + UX-012: the room's activity context, and the existing
+            route to Activity Detail. A semantic React Router <Link> (real
+            anchor, keyboard accessible, visible text) — the activity name and
+            the Rename control above are untouched, and no timer, membership,
+            or destructive control is part of this navigation target. */}
+        {activityId && (
+          <div className="mt-4 border-t border-slate-100 pt-4 text-center">
+            <Link
+              to={activityDetailPath(activityId)}
+              className="inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+            >
+              {ACTIVITY_DETAIL_LINK_LABEL}
+            </Link>
+            <p className="mt-2 text-xs text-slate-500">{ROOM_ACTIVITY_CONTEXT_NOTE}</p>
+          </div>
         )}
       </div>
 

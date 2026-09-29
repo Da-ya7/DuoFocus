@@ -20,6 +20,10 @@ import { deleteUserSession, getUserSessions } from '../services/sessions'
 import { getActivitiesForUser, getActivitySummary } from '../services/activities'
 import { calculateStudyStatistics } from '../utils/stats'
 import { resolveRoomTopic } from '../utils/activityUi'
+import {
+  activityNamesById,
+  type SessionActivityLookup,
+} from '../utils/activityContextUi'
 import { StatsSummary } from '../components/stats/StatsSummary'
 import { SessionHistory } from '../components/stats/SessionHistory'
 import { ActivityList, type ActivityListItem } from '../components/activity/ActivityList'
@@ -199,6 +203,22 @@ export function AppHomePage() {
   }, [uid])
 
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
+
+  // UX-014: label each session row with its activity's CURRENT name. The names
+  // come from the member-scoped activity list this page ALREADY loads (whose
+  // names are the current activity documents) — one deduplicated map, no
+  // per-session read, no extra listener, and no `activityName` snapshot stored
+  // on the session. While that list is still loading the rows show a
+  // provisional label and remain fully usable; if it fails, rows fall back to
+  // a safe label and keep their date, room code, and duration.
+  const activityNames = useMemo(() => activityNamesById(activities), [activities])
+  const sessionActivityLookup = useMemo<SessionActivityLookup>(
+    () => ({
+      status: activitiesLoading ? 'loading' : activitiesError ? 'error' : 'ready',
+      names: activityNames,
+    }),
+    [activitiesLoading, activitiesError, activityNames],
+  )
 
   // UX-002: the room-entry area is a pure function of the lookup state, and
   // one flag decides whether any create/join action may run.
@@ -485,6 +505,7 @@ export function AppHomePage() {
                 onCancelDelete={handleCancelDeleteSession}
                 confirmingSessionId={confirmingSessionId}
                 deletingSessionId={deletingSessionId}
+                activityLookup={sessionActivityLookup}
               />
             </div>
           )}
