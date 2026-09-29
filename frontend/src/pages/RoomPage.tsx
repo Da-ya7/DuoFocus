@@ -19,6 +19,11 @@ import { ROOM_MAX_MEMBERS } from '../types/room'
 import type { Activity } from '../types/activity'
 import { DEFAULT_DURATION_SECONDS, type TimerStatus } from '../types/timer'
 import { friendlyTimerError } from '../services/timerErrors'
+import {
+  buildCompletionSummary,
+  timerControls,
+  type TimerControlAction,
+} from '../utils/completionUi'
 import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
 import { syncMissedRoomCompletions } from '../services/sessions'
 import type { PresenceStatus, RoomPresence } from '../types/presence'
@@ -89,6 +94,12 @@ export function RoomPage() {
 
   // Completion guard: only one in-flight completion attempt per expiry.
   const completingRef = useRef(false)
+
+  // Airtight duplicate-submission guard for every timer transition (mirrors
+  // leaveInFlightRef): a rapid or programmatic repeat click cannot start a
+  // second request — in particular, "Study again" (UX-013) can never issue
+  // two resets. `busyAction` state still drives the labels/disabled styling.
+  const timerActionInFlightRef = useRef(false)
 
   // UX-001: personal-session materialization trigger. The session service is
   // the only writer (deterministic `${roomId}_${completionId}` IDs plus a
@@ -303,8 +314,9 @@ export function RoomPage() {
   }, [])
 
   const runTimerAction = useCallback(
-    async (action: 'start' | 'pause' | 'resume' | 'reset') => {
-      if (!roomId || busyAction) return
+    async (action: TimerControlAction) => {
+      if (!roomId || timerActionInFlightRef.current) return
+      timerActionInFlightRef.current = true
       setBusyAction(action)
       setTimerError(null)
       try {
@@ -313,12 +325,16 @@ export function RoomPage() {
         else if (action === 'resume') await resumeTimer(roomId)
         else await resetTimer(roomId)
       } catch (error) {
+        // Failure keeps the authoritative state untouched (a failed reset
+        // leaves the timer COMPLETE) and surfaces the existing friendly
+        // message; the control re-enables in `finally` for a retry.
         setTimerError(friendlyTimerError(error))
       } finally {
+        timerActionInFlightRef.current = false
         setBusyAction(null)
       }
     },
-    [roomId, busyAction],
+    [roomId],
   )
 
   // Rename goes through the activity service (never a direct Firestore write);
@@ -431,10 +447,20 @@ export function RoomPage() {
   const status = timerReady ? timer.status : 'idle'
   const expired = timerReady && status === 'running' && derivedRemainingMs(timer) <= 0
 
-  const primaryAction: 'start' | 'pause' | 'resume' | null =
-    status === 'idle' ? 'start' : status === 'running' ? 'pause' : status === 'paused' ? 'resume' : null
-
   const timerActionInFlight = busyAction !== null
+  const timerControlList = timerControls(status)
+
+  // UX-003: derived from the AUTHORITATIVE live timer snapshot
+  // (`status === 'completed'`) — never a local boolean — so the summary
+  // survives refresh, re-entry, realtime snapshots, and the partner's
+  // completion. The duration comes from the existing configured session
+  // length (a completed timer's remainingSeconds is always 0, so the
+  // remaining value cannot express it), which is exactly the value the
+  // completion evidence is stamped with in completeTimerIfDue.
+  const completionSummary =
+    status === 'completed'
+      ? buildCompletionSummary(activity?.name ?? null, DEFAULT_DURATION_SECONDS)
+      : null
 
   return (
     <section className="flex flex-1 flex-col items-center py-12">
@@ -470,6 +496,21 @@ export function RoomPage() {
           {timerReady ? STATUS_LABEL[status] : '—'}
         </p>
 
+        {/* UX-003: completion summary (visible text only — no colour-only
+            meaning, no modal, no extra ARIA). */}
+        {completionSummary && (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
+            <p className="text-sm font-semibold text-slate-900">{completionSummary.headline}</p>
+            {completionSummary.activityName && (
+              <p className="mt-1 text-sm font-medium text-slate-700">
+                {completionSummary.activityName}
+              </p>
+            )}
+            <p className="mt-1 text-sm text-slate-700">{completionSummary.durationLabel}</p>
+            <p className="mt-1 text-xs text-slate-500">{completionSummary.recordedNote}</p>
+          </div>
+        )}
+
         {timerError && (
           <div
             role="alert"
@@ -480,36 +521,23 @@ export function RoomPage() {
         )}
 
         <div className="mt-6 flex gap-3">
-          {primaryAction && (
+          {timerControlList.map((control) => (
             <button
+              key={control.action}
               type="button"
-              onClick={() => runTimerAction(primaryAction)}
+              onClick={() => runTimerAction(control.action)}
               disabled={!isMember || timerActionInFlight}
-              className="flex-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className={
+                control.variant === 'primary'
+                  ? 'flex-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
+                  : 'flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'
+              }
             >
-              {primaryAction === 'start'
-                ? timerActionInFlight && busyAction === 'start'
-                  ? 'Starting…'
-                  : 'Start'
-                : primaryAction === 'pause'
-                  ? timerActionInFlight && busyAction === 'pause'
-                    ? 'Pausing…'
-                    : 'Pause'
-                  : timerActionInFlight && busyAction === 'resume'
-                    ? 'Resuming…'
-                    : 'Resume'}
+              {timerActionInFlight && busyAction === control.action
+                ? control.busyLabel
+                : control.label}
             </button>
-          )}
-          {status !== 'idle' && (
-            <button
-              type="button"
-              onClick={() => runTimerAction('reset')}
-              disabled={!isMember || timerActionInFlight}
-              className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {timerActionInFlight && busyAction === 'reset' ? 'Resetting…' : 'Reset'}
-            </button>
-          )}
+          ))}
         </div>
 
         {expired && (
