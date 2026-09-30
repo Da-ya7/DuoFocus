@@ -147,12 +147,12 @@ export function ActivityDetailPage() {
             type="button"
             onClick={handleRetry}
             disabled={loading}
-            className="mt-3 w-full rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-3 w-full rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {RETRY_LABEL}
           </button>
         </div>
-        <Link to="/app" className="mt-4 text-sm font-semibold text-slate-900 hover:underline">
+        <Link to="/app" className="mt-4 text-sm font-semibold text-slate-900 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900">
           Back to home
         </Link>
       </section>
@@ -218,7 +218,7 @@ export function ActivityDetailPage() {
 
         <Link
           to="/app"
-          className="mt-8 block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-center text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+          className="mt-8 block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-center text-sm font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50"
         >
           Back to home
         </Link>

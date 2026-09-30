@@ -33,7 +33,9 @@ import { setOwnPresence, subscribeToRoomPresence } from '../services/presence'
 import { syncMissedRoomCompletions } from '../services/sessions'
 import type { PresenceStatus, RoomPresence } from '../types/presence'
 import { PartnerPresence } from '../components/room/PartnerPresence'
+import { StatusAnnouncer, useStatusAnnouncement } from '../components/StatusAnnouncer'
 import { formatClock } from '../utils/time'
+import { timerStatusAnnouncement } from '../utils/announceUi'
 
 /** Milliseconds between local countdown re-renders (visual only). */
 const TICK_MS = 250
@@ -117,6 +119,16 @@ export function RoomPage() {
   const sessionSyncInFlightRef = useRef(false)
   const [sessionSyncError, setSessionSyncError] = useState<string | null>(null)
 
+  // ---- Phase 11.21 (N-09): screen-reader status announcements ----
+  // A polite region for the shared timer's MEANINGFUL transitions only
+  // (started / resumed / paused / completed). The decision is the pure
+  // timerStatusAnnouncement rule; the countdown and ordinary snapshot
+  // refreshes never produce an announcement, and no listener, read, write,
+  // or poll is added. (Partner presence announcements live inside
+  // PartnerPresence, which derives them from the existing view.)
+  const { announcement: timerAnnouncement, announce: announceTimer } =
+    useStatusAnnouncement()
+
   useEffect(() => {
     if (!roomId || !uid) return
 
@@ -134,6 +146,11 @@ export function RoomPage() {
         const nextStatus = nextRoom.timer?.status ?? null
         const previousStatus = lastTimerStatusRef.current
         lastTimerStatusRef.current = nextStatus
+        // 11.21: mirror the transition into the polite status region. The
+        // rule itself silences the baseline snapshot, repeated identical
+        // statuses, and the silent idle entry — the announcer's key/message
+        // comparison then dedupes any residual repeat.
+        announceTimer(timerStatusAnnouncement(nextStatus, previousStatus))
         if (nextStatus === 'completed' && previousStatus !== 'completed') {
           void syncSessionsForRoom(roomId)
         }
@@ -409,7 +426,10 @@ export function RoomPage() {
     return (
       <section className="flex flex-1 flex-col items-center justify-center py-20 text-center">
         <p className="text-sm text-slate-600">Room unavailable.</p>
-        <Link to="/app" className="mt-3 text-sm font-semibold text-slate-900 hover:underline">
+        <Link
+          to="/app"
+          className="mt-3 text-sm font-semibold text-slate-900 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
+        >
           Back to home
         </Link>
       </section>
@@ -419,8 +439,11 @@ export function RoomPage() {
   if (listenerError) {
     return (
       <section className="flex flex-1 flex-col items-center justify-center py-20 text-center">
-        <p className="text-sm text-slate-600">{listenerError}</p>
-        <Link to="/app" className="mt-3 text-sm font-semibold text-slate-900 hover:underline">
+        <p role="alert" className="text-sm text-slate-600">{listenerError}</p>
+        <Link
+          to="/app"
+          className="mt-3 text-sm font-semibold text-slate-900 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
+        >
           Back to home
         </Link>
       </section>
@@ -504,7 +527,7 @@ export function RoomPage() {
           <div className="mt-4 border-t border-slate-100 pt-4 text-center">
             <Link
               to={activityDetailPath(activityId)}
-              className="inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+              className="inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50"
             >
               {ACTIVITY_DETAIL_LINK_LABEL}
             </Link>
@@ -524,6 +547,11 @@ export function RoomPage() {
         <p className="mt-2 text-center text-xs font-semibold uppercase tracking-widest text-slate-500">
           {timerReady ? STATUS_LABEL[status] : '—'}
         </p>
+
+        {/* 11.21 (N-09): visually hidden polite region for MEANINGFUL timer
+            transitions. The 250 ms countdown is never placed here, so the
+            region only ever speaks a short state-change message. */}
+        <StatusAnnouncer announcement={timerAnnouncement} />
 
         {/* UX-003: completion summary (visible text only — no colour-only
             meaning, no modal, no extra ARIA). */}
@@ -558,8 +586,8 @@ export function RoomPage() {
               disabled={!isMember || timerActionInFlight}
               className={
                 control.variant === 'primary'
-                  ? 'flex-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
-                  : 'flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'
+                  ? 'flex-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60'
+                  : 'flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'
               }
             >
               {timerActionInFlight && busyAction === control.action
@@ -641,7 +669,7 @@ export function RoomPage() {
             type="button"
             onClick={handleRequestLeave}
             disabled={leaving || !isMember}
-            className="mt-8 w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-8 w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {leaving ? 'Leaving…' : 'Leave Room'}
           </button>

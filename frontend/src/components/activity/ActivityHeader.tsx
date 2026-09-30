@@ -85,7 +85,7 @@ export function ActivityHeader({ name, canRename, onRename }: ActivityHeaderProp
           <button
             type="submit"
             disabled={saving}
-            className="flex-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -93,7 +93,7 @@ export function ActivityHeader({ name, canRename, onRename }: ActivityHeaderProp
             type="button"
             onClick={cancelEditing}
             disabled={saving}
-            className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Cancel
           </button>
@@ -112,15 +112,18 @@ export function ActivityHeader({ name, canRename, onRename }: ActivityHeaderProp
 
   return (
     <>
-      <p className="mt-2 truncate text-center text-2xl font-bold tracking-tight text-slate-900">
+      {/* 11.21 (N-09): the activity name IS the page-level h1 on both pages
+          that render this header (RoomPage and ActivityDetailPage) — one
+          heading source, identical visual styling as before. */}
+      <h1 className="mt-2 truncate text-center text-2xl font-bold tracking-tight text-slate-900">
         {name ?? '—'}
-      </p>
+      </h1>
       {canRename && (
         <div className="mt-3 text-center">
           <button
             type="button"
             onClick={startEditing}
-            className="rounded px-2 py-1 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+            className="rounded px-2 py-1 text-xs font-medium text-slate-500 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 hover:bg-slate-50 hover:text-slate-700"
           >
             Rename
           </button>
