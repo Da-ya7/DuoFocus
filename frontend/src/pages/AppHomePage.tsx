@@ -442,25 +442,10 @@ export function AppHomePage() {
     setError(null)
     setBusy('join')
     try {
-      await joinRoom(normalizedCode)
-      // roomId is resolved inside the join flow; re-lookup our room to find it.
-      if (uid) {
-        const room = await findActiveRoomForUser(uid)
-        if (room) {
-          navigate(`/app/room/${room.id}`)
-          return
-        }
-      }
-      setError('Joined the room, but its page could not be opened. Try again.')
+      const roomId = await joinRoom(normalizedCode)
+      navigate(`/app/room/${roomId}`)
     } catch (err) {
-      // UX-002: the post-join re-lookup can surface 'taken' (the account now
-      // occupies two rooms). That is its own state with its own message and
-      // recovery — never a generic failure.
-      if (classifyActiveRoomFailure(err) === 'multiple-rooms') {
-        setActiveRoomLookup({ status: 'unavailable', reason: 'multiple-rooms' })
-      } else {
-        setError(friendlyRoomError(err))
-      }
+      setError(friendlyRoomError(err))
     } finally {
       setBusy(null)
     }

@@ -195,8 +195,10 @@ export async function createRoom(
  * commit against the live documents (and cross-check the two via getAfter),
  * so concurrent joins serialize — the second commit sees a full room/activity
  * and is rejected. Neither list can ever exceed 2, and they can never drift.
+ * The resolved room ID is returned after the batch commits so callers can
+ * navigate without a second room lookup.
  */
-export async function joinRoom(rawCode: string): Promise<void> {
+export async function joinRoom(rawCode: string): Promise<string> {
   const uid = requireUid()
   const code = normalizeRoomCode(rawCode)
 
@@ -237,6 +239,7 @@ export async function joinRoom(rawCode: string): Promise<void> {
     batch.update(roomRef, { memberIds: arrayUnion(uid) })
     batch.update(activityRef, { memberIds: arrayUnion(uid) })
     await batch.commit()
+    return roomId
   } catch (error) {
     // Classify the rejection without needing broad read access:
     //  - member?          -> already in the room

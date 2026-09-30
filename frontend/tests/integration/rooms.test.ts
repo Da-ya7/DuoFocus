@@ -138,9 +138,12 @@ describe('A. room service integration', () => {
     await signInAs(USER_A)
     const { roomCode } = await createRoom()
     await signInAs(USER_B)
-    await joinRoom(roomCode)
+    const joinedRoomId = await joinRoom(roomCode)
 
-    const roomDoc = await getRoomDoc(roomIdFromCode((await listRoomCodes())[0]!))
+    const resolvedRoomId = roomIdFromCode((await listRoomCodes())[0]!)
+    expect(joinedRoomId).toBe(resolvedRoomId)
+
+    const roomDoc = await getRoomDoc(resolvedRoomId)
     const room = parseRoom(roomDoc!)
     expect(room.memberIds).toHaveLength(2)
     expect(room.memberIds).toEqual(expect.arrayContaining([USER_A, USER_B]))
