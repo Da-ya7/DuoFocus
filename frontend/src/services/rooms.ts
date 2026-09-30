@@ -394,21 +394,23 @@ export async function findActiveRoomForUser(uid: string): Promise<RoomWithId | n
 /**
  * Subscribes to real-time updates for a room. The listener is member-scoped:
  * security rules reject any document whose memberIds exclude the caller.
- * Returns an unsubscribe function.
+ * A missing document is reported through `onMissing` instead of being
+ * silently ignored. Returns an unsubscribe function.
  */
 export function subscribeToRoom(
   roomId: string,
   onUpdate: (room: Room) => void,
   onError?: (error: unknown) => void,
+  onMissing?: () => void,
 ): Unsubscribe {
   return onSnapshot(
     doc(db, ROOMS, roomId),
     (snapshot) => {
       if (snapshot.exists()) {
         onUpdate(snapshot.data() as Room)
+      } else {
+        onMissing?.()
       }
-      // Room deleted (final leave) simply stops producing updates; the page
-      // handles the disappeared-room case via leaveRoom()'s return flow.
     },
     onError,
   )

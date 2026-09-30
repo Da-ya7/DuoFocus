@@ -140,6 +140,13 @@ export function RoomPage() {
       },
       () => {
         // Member-only read rejected (stale/invalid id) — friendly state.
+        setRoom(null)
+        setListenerError('This room is no longer available.')
+      },
+      () => {
+        // A missing snapshot is distinct from a listener error, but the room
+        // is no longer usable and must not leave stale data on screen.
+        setRoom(null)
         setListenerError('This room is no longer available.')
       },
     )
@@ -164,11 +171,12 @@ export function RoomPage() {
       activityId,
       (nextActivity) => {
         setActivity(nextActivity)
-        setActivityError(null)
+        setActivityError(nextActivity ? null : 'Activity unavailable.')
       },
       () => {
         // Non-fatal: the room and its timer keep working even if the activity
         // is momentarily unreadable.
+        setActivity(null)
         setActivityError('Activity details are unavailable right now.')
       },
     )
