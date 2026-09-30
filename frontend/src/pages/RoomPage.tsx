@@ -450,7 +450,6 @@ export function RoomPage() {
   // ---- Partner presence derivation (Phase 7.6) ----
   const partnerUid = room.memberIds.find((id) => id !== uid) ?? null
   const partnerPresence = partnerUid ? presenceList.find((p) => p.uid === partnerUid) : null
-  const partnerStatus = partnerPresence ? partnerPresence.status : null
 
   // ---- Timer derivation (visual only; Firestore is authoritative) ----
   const timer = room.timer
@@ -614,7 +613,7 @@ export function RoomPage() {
                     {memberUid === uid ? 'You' : 'Friend'}
                   </span>
                   {memberUid !== uid && (
-                    <PartnerPresence status={partnerStatus} />
+                    <PartnerPresence presence={partnerPresence ?? null} />
                   )}
                 </div>
                 {memberUid === room.ownerId && (

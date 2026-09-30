@@ -26,6 +26,42 @@
  * supported by anything the UI can trust here, so it is never rendered.
  */
 import type { PresenceStatus } from '../types/presence'
+import type { TimestampLike } from '../types/timer'
+
+/** Presence is considered stale after three expected heartbeat intervals. */
+export const PRESENCE_STALE_AFTER_MS = 90_000
+
+/** Local-only interval for re-evaluating mounted partner presence. */
+export const PRESENCE_RECHECK_INTERVAL_MS = 15_000
+
+/** Converts a valid Firestore timestamp-like value to milliseconds. */
+function timestampMillis(lastSeen: TimestampLike | null | undefined): number | null {
+  if (
+    !lastSeen ||
+    typeof lastSeen.seconds !== 'number' ||
+    typeof lastSeen.nanoseconds !== 'number' ||
+    !Number.isFinite(lastSeen.seconds) ||
+    !Number.isFinite(lastSeen.nanoseconds)
+  ) {
+    return null
+  }
+
+  const milliseconds = lastSeen.seconds * 1000 + Math.floor(lastSeen.nanoseconds / 1_000_000)
+  return Number.isFinite(milliseconds) ? milliseconds : null
+}
+
+/** Determines whether server-generated presence data is fresh for presentation. */
+export function isPresenceFresh(
+  lastSeen: TimestampLike | null | undefined,
+  nowMs: number,
+  staleAfterMs: number = PRESENCE_STALE_AFTER_MS,
+): boolean {
+  const seenMs = timestampMillis(lastSeen)
+  if (seenMs === null || !Number.isFinite(nowMs) || !Number.isFinite(staleAfterMs)) {
+    return false
+  }
+  return nowMs - seenMs <= staleAfterMs
+}
 
 /**
  * Visual family of a state, decided here (semantics) and turned into Tailwind
@@ -58,7 +94,15 @@ export interface PresenceView {
  * label, and always falls back to the existing offline behaviour rather than
  * inventing a state.
  */
-export function resolvePresenceView(status: PresenceStatus | null | undefined): PresenceView {
+export function resolvePresenceView(
+  status: PresenceStatus | null | undefined,
+  lastSeen: TimestampLike | null | undefined,
+  nowMs: number = Date.now(),
+): PresenceView {
+  if ((status === 'online' || status === 'idle') && !isPresenceFresh(lastSeen, nowMs)) {
+    return { label: 'Offline', detail: 'Not currently active', tone: 'inactive' }
+  }
+
   switch (status) {
     case 'online':
       return { label: 'Online', detail: 'Active in this room', tone: 'active' }

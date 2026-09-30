@@ -1,8 +1,13 @@
-import { resolvePresenceView, type PresenceTone } from '../../utils/presenceUi'
-import type { PresenceStatus } from '../../types/presence'
+import { useEffect, useState } from 'react'
+import {
+  PRESENCE_RECHECK_INTERVAL_MS,
+  resolvePresenceView,
+  type PresenceTone,
+} from '../../utils/presenceUi'
+import type { RoomPresence } from '../../types/presence'
 
 export interface PartnerPresenceProps {
-  status: PresenceStatus | null
+  presence: RoomPresence | null
 }
 
 /**
@@ -27,8 +32,15 @@ const TONE_STYLES: Record<PresenceTone, { dotClass: string; textClass: string }>
  * missing presence document (or no partner) keeps the existing offline
  * behaviour — handled by resolvePresenceView, never by writing a document.
  */
-export function PartnerPresence({ status }: PartnerPresenceProps) {
-  const view = resolvePresenceView(status)
+export function PartnerPresence({ presence }: PartnerPresenceProps) {
+  const [nowMs, setNowMs] = useState(() => Date.now())
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), PRESENCE_RECHECK_INTERVAL_MS)
+    return () => window.clearInterval(interval)
+  }, [])
+
+  const view = resolvePresenceView(presence?.status, presence?.lastSeen, nowMs)
   const tone = TONE_STYLES[view.tone]
 
   return (
