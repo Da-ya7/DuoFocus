@@ -13,7 +13,24 @@
  *  - Independent-client writes use the EXACT service write shape
  *    (updateDoc + arrayUnion). No mocks anywhere; all writes hit real rules.
  */
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const readCounts = { getDoc: 0, getDocs: 0 }
+
+vi.mock('firebase/firestore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('firebase/firestore')>()
+  return {
+    ...actual,
+    getDoc: (...args: Parameters<typeof actual.getDoc>) => {
+      readCounts.getDoc += 1
+      return actual.getDoc(...args)
+    },
+    getDocs: (...args: Parameters<typeof actual.getDocs>) => {
+      readCounts.getDocs += 1
+      return actual.getDocs(...args)
+    },
+  }
+})
 import { deleteApp, initializeApp, type FirebaseApp } from 'firebase/app'
 import {
   connectAuthEmulator,
@@ -31,6 +48,7 @@ import {
 
 import {
   createActivity,
+  getActivityDetail,
   getActivity,
   joinActivity,
   leaveActivity,
@@ -50,13 +68,15 @@ import {
   timestampValueMs,
   waitFor,
 } from './helpers'
-import { rvString, rvStringArray, rvTimestamp, SEED_BASE_ISO } from './adminRest'
+import { rvInt, rvString, rvStringArray, rvTimestamp, SEED_BASE_ISO } from './adminRest'
 import { customTokenForUser } from './customToken'
 import type { Activity } from '../../src/types/activity'
 
 beforeEach(async () => {
   assertEmulatorGateEngaged()
   await resetIntegrationState()
+  readCounts.getDoc = 0
+  readCounts.getDocs = 0
 })
 
 afterAll(async () => {
@@ -507,6 +527,46 @@ describe('E. Rename', () => {
     const after = parseActivity((await adminGetDoc(`activities/${created.id}`))!).createdAtMs
     expect(before).toBeGreaterThan(0)
     expect(after).toBe(before)
+  })
+})
+
+describe('E2. Activity Detail read shape', () => {
+  it('loads summary and history from one authorized evidence query', async () => {
+    await signInAs('userA')
+    const created = await createActivity('DSA')
+    await adminSetDoc('rooms/detailRoom/completions/detailCompletion', {
+      completedAt: rvTimestamp(SEED_BASE_ISO),
+      durationSeconds: rvInt(1500),
+      memberIds: rvStringArray(['userA', 'userB']),
+      roomCode: rvString('DETAIL'),
+      activityId: rvString(created.id),
+    })
+
+    readCounts.getDoc = 0
+    readCounts.getDocs = 0
+    const detail = await getActivityDetail(created.id)
+
+    expect(detail.summary).toMatchObject({
+      activityId: created.id,
+      name: 'DSA',
+      totalFocusSeconds: 1500,
+      studyDays: 1,
+    })
+    expect(detail.history).toHaveLength(1)
+    expect(detail.history[0]!.focusSeconds).toBe(1500)
+    expect(readCounts.getDoc).toBe(1)
+    expect(readCounts.getDocs).toBe(1)
+  })
+
+  it('preserves member-only authorization for consolidated detail reads', async () => {
+    await signInAs('userA')
+    const created = await createActivity('DSA')
+    await signInAs('userB')
+
+    await expect(getActivityDetail(created.id)).rejects.toMatchObject({
+      name: 'ActivityError',
+      code: 'permission-denied',
+    })
   })
 })
 

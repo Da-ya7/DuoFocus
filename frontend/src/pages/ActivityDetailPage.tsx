@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
-  getActivityHistory,
-  getActivitySummary,
+  getActivityDetail,
   renameActivity,
 } from '../services/activities'
 import type { ActivityHistoryEntry, ActivitySummary } from '../types/activity'
@@ -61,8 +60,8 @@ export function ActivityDetailPage() {
     setLoading(true)
     setError(null)
 
-    Promise.all([getActivitySummary(activityId), getActivityHistory(activityId)])
-      .then(([nextSummary, nextHistory]) => {
+    getActivityDetail(activityId)
+      .then(({ summary: nextSummary, history: nextHistory }) => {
         if (!cancelled) {
           setSummary(nextSummary)
           setHistory(nextHistory)
@@ -108,9 +107,9 @@ export function ActivityDetailPage() {
       }
       // Failures propagate to the header, which renders them safely.
       await renameActivity(activityId, name)
-      // Re-read rather than patching local state: the displayed name must be
-      // the activity document's, and historical completions are untouched.
-      setReloadToken((token) => token + 1)
+      // The service has accepted and trimmed the name; history and totals are
+      // unchanged, so avoid re-reading completion evidence just to refresh it.
+      setSummary((current) => (current ? { ...current, name: name.trim() } : current))
     },
     [activityId],
   )

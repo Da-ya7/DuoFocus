@@ -450,6 +450,26 @@ export async function getActivityHistory(activityId: string): Promise<ActivityHi
   return calculateActivityHistory({ id: activity.id }, completions)
 }
 
+/**
+ * Loads Activity Detail data with one authorization read and one evidence
+ * query, then derives the summary and history from that same evidence set.
+ */
+export interface ActivityDetailData {
+  summary: ActivitySummary
+  history: ActivityHistoryEntry[]
+}
+
+export async function getActivityDetail(activityId: string): Promise<ActivityDetailData> {
+  requireUid()
+  const activity = await loadAccessibleActivity(activityId)
+  const completions = await queryActivityCompletions(activityId)
+
+  return {
+    summary: calculateActivitySummary({ id: activity.id, name: activity.name }, completions),
+    history: calculateActivityHistory({ id: activity.id }, completions),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Phase 11.8 — Home activity overview (UX-015 N+1 removal, UX-016 freshness)
 // ---------------------------------------------------------------------------
