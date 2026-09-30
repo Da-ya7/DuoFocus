@@ -11,6 +11,7 @@ import {
   resolveSessionActivity,
   type SessionActivityLookup,
 } from '../../utils/activityContextUi'
+import type { HomeEmptyState } from '../../utils/homeUi'
 
 export interface SessionHistoryProps {
   sessions: readonly StudySession[]
@@ -33,6 +34,12 @@ export interface SessionHistoryProps {
    * no lookup of its own. Omitted (or loading) never blocks a row.
    */
   activityLookup?: SessionActivityLookup
+  /**
+   * UX-006: the section's empty-state copy (what is empty → why it matters →
+   * what to do next), supplied by the page from src/utils/homeUi.ts. Optional:
+   * when omitted the component keeps its original one-line empty message.
+   */
+  emptyState?: HomeEmptyState
 }
 
 /**
@@ -99,6 +106,7 @@ export function SessionHistory({
   confirmingSessionId,
   deletingSessionId,
   activityLookup,
+  emptyState,
 }: SessionHistoryProps) {
   const cancelRef = useRef<HTMLButtonElement | null>(null)
   const requestRef = useRef<HTMLButtonElement | null>(null)
@@ -123,8 +131,11 @@ export function SessionHistory({
 
   if (sessions.length === 0) {
     return (
-      <div className="rounded-lg border border-slate-100 bg-slate-50/80 p-4 text-center text-xs text-slate-400">
-        No study sessions yet.
+      <div className="rounded-lg border border-slate-100 bg-slate-50/80 p-4 text-center">
+        <p className="text-xs text-slate-400">
+          {emptyState ? emptyState.message : 'No study sessions yet.'}
+        </p>
+        {emptyState && <p className="mt-1 text-xs text-slate-400">{emptyState.hint}</p>}
       </div>
     )
   }

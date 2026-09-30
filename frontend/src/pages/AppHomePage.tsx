@@ -33,6 +33,10 @@ import {
 import { StatsSummary } from '../components/stats/StatsSummary'
 import { SessionHistory } from '../components/stats/SessionHistory'
 import { ActivityList, type ActivityListItem } from '../components/activity/ActivityList'
+import {
+  HOME_EMPTY_STATES,
+  HOME_SECTION_META,
+} from '../utils/homeUi'
 import { ACTIVITY_NAME_MAX_LENGTH, type ActivitySummary } from '../types/activity'
 import { RoomError } from '../types/room'
 import type { StudySession } from '../types/session'
@@ -379,7 +383,6 @@ export function AppHomePage() {
             Signed in as {user?.email ?? 'Unknown User'}
           </p>
         </div>
-
         {error && (
           <div
             role="alert"
@@ -390,7 +393,7 @@ export function AppHomePage() {
         )}
 
         {roomEntry.panel === 'active-room' && activeRoom && (
-          <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
+          <div className="mt-8 rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Your active room
             </p>
@@ -408,13 +411,13 @@ export function AppHomePage() {
         )}
 
         {roomEntry.panel === 'checking' && (
-          <div className="mt-6 rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-sm text-slate-400">
+          <div className="mt-8 rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-sm text-slate-400">
             Checking your rooms…
           </div>
         )}
 
         {roomEntry.panel === 'recovery' && (
-          <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-center">
+          <div className="mt-8 rounded-lg border border-amber-200 bg-amber-50 p-4 text-center">
             <p role="alert" className="text-sm text-amber-800">
               {roomEntry.recoveryMessage}
             </p>
@@ -431,7 +434,7 @@ export function AppHomePage() {
 
         {roomEntry.panel === 'create-join' && (
           <>
-            <div className="mt-6">
+            <div className="mt-8">
               <label htmlFor="room-topic" className="block text-sm font-medium text-slate-700">
                 What&apos;s the topic?{' '}
                 <span className="font-normal text-slate-400">(optional)</span>
@@ -503,11 +506,18 @@ export function AppHomePage() {
           </>
         )}
 
-        {/* Study Statistics Section */}
-        <div className="mt-8 border-t border-slate-200 pt-6">
-          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Study Statistics
+        {/* ---- Your study record (PERSONAL scope: statistics + history) — UX-006 ---- */}
+        <div
+          className="mt-8 border-t border-slate-200 pt-6"
+          aria-labelledby="home-personal-heading"
+        >
+          <h2
+            id="home-personal-heading"
+            className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            Your study record
           </h2>
+          <p className="mb-3 text-xs text-slate-400">{HOME_SECTION_META.personal.caption}</p>
           {statsLoading ? (
             <div className="rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-xs text-slate-400">
               Loading statistics…
@@ -531,11 +541,11 @@ export function AppHomePage() {
           )}
 
           {/* Study History Section */}
-          {!statsLoading && !statsError && (
+          {!statsLoading && !statsError && !activitiesLoading && !activitiesError && (
             <div className="mt-6">
-              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Study History
-              </h2>
+              </h3>
 
               {deleteError && (
                 <div
@@ -554,16 +564,24 @@ export function AppHomePage() {
                 confirmingSessionId={confirmingSessionId}
                 deletingSessionId={deletingSessionId}
                 activityLookup={sessionActivityLookup}
+                emptyState={HOME_EMPTY_STATES.personal}
               />
             </div>
           )}
         </div>
 
-        {/* Study Activities Section (Phase 10.8) */}
-        <div className="mt-8 border-t border-slate-200 pt-6">
-          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Your Activities
+        {/* Study Activities Section (Phase 10.8) — SHARED scope, section identity per UX-006 */}
+        <div
+          className="mt-8 border-t border-slate-200 pt-6"
+          aria-labelledby="home-activities-heading"
+        >
+          <h2
+            id="home-activities-heading"
+            className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            Your activities
           </h2>
+          <p className="mb-3 text-xs text-slate-400">{HOME_SECTION_META.activities.caption}</p>
           {activitiesLoading ? (
             <div className="rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-xs text-slate-400">
               Loading activities…
@@ -586,6 +604,7 @@ export function AppHomePage() {
             <ActivityList
               items={activities}
               onSelect={(activityId) => navigate(`/app/activity/${activityId}`)}
+              emptyState={HOME_EMPTY_STATES.activities}
             />
           )}
         </div>
@@ -594,7 +613,7 @@ export function AppHomePage() {
           type="button"
           onClick={handleLogout}
           disabled={busy !== null}
-          className="mt-8 w-full text-xs font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50"
+          className="mt-6 w-full text-xs font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50"
         >
           {busy === 'logout' ? 'Signing out…' : 'Logout'}
         </button>

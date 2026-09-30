@@ -1,4 +1,5 @@
 import { formatFocusDuration } from '../../utils/activityUi'
+import type { HomeEmptyState } from '../../utils/homeUi'
 
 /** One row of the user's activity list (derived, never stored). */
 export interface ActivityListItem {
@@ -11,6 +12,12 @@ export interface ActivityListItem {
 export interface ActivityListProps {
   items: readonly ActivityListItem[]
   onSelect: (activityId: string) => void
+  /**
+   * UX-006: the section's empty-state copy (what is empty → why it matters →
+   * what to do next), supplied by the page from src/utils/homeUi.ts. Optional:
+   * when omitted the component keeps its original one-line empty message.
+   */
+  emptyState?: HomeEmptyState
 }
 
 /**
@@ -21,11 +28,16 @@ export interface ActivityListProps {
  * an error — it renders with "0m" like any other row. The empty list has its
  * own message.
  */
-export function ActivityList({ items, onSelect }: ActivityListProps) {
+export function ActivityList({ items, onSelect, emptyState }: ActivityListProps) {
   if (items.length === 0) {
     return (
-      <div className="rounded-lg border border-slate-100 bg-slate-50/80 p-4 text-center text-xs text-slate-400">
-        No activities yet. Create a room to start one.
+      <div className="rounded-lg border border-slate-100 bg-slate-50/80 p-4 text-center">
+        <p className="text-xs text-slate-400">
+          {emptyState ? emptyState.message : 'No activities yet. Create a room to start one.'}
+        </p>
+        {emptyState && (
+          <p className="mt-1 text-xs text-slate-400">{emptyState.hint}</p>
+        )}
       </div>
     )
   }
