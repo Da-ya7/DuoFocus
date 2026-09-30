@@ -447,6 +447,19 @@ describe('11.11 UX-016: Home live catch-up of missed personal sessions', () => {
   })
 
   it('H: an unauthenticated pass rejects with the TYPED SessionError, never a raw Firebase error', async () => {
+    await signInAs(USER_A)
+    await adminSetDoc(`users/${USER_A}/sessions/existingCatchUpSession`, {
+      userId: rvString(USER_A),
+      roomId: rvString('existingRoom'),
+      completionId: rvString('existingCompletion'),
+      roomCode: rvString('EXIST1'),
+      durationSeconds: rvInt(1500),
+      activityId: rvString('existingActivity'),
+      completedAt: rvTimestamp(ISO),
+      createdAt: rvTimestamp(ISO),
+    })
+    const beforeFailure = await listUserSessions(USER_A)
+
     const { signOut } = await import('firebase/auth')
     const { auth } = await import('../../src/services/firebase')
     await signOut(auth)
@@ -455,5 +468,8 @@ describe('11.11 UX-016: Home live catch-up of missed personal sessions', () => {
       name: 'SessionError',
       code: 'permission-denied',
     })
+
+    expect(await listUserSessions(USER_A)).toHaveLength(beforeFailure.length)
+    expect(docId((await listUserSessions(USER_A))[0]!)).toBe('existingCatchUpSession')
   })
 })

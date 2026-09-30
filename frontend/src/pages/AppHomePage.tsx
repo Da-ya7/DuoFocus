@@ -127,6 +127,10 @@ export function AppHomePage() {
   // catch-up effect below.
   const accountedSessionIdsRef = useRef<Set<string> | null>(null)
   const catchUpPassRef = useRef<CatchUpPass | null>(null)
+  const catchUpInFlightRef = useRef(false)
+  const catchUpRetryGuardRef = useRef<RetryGuardRef>({ current: false })
+  const [sessionCatchUpError, setSessionCatchUpError] = useState<string | null>(null)
+  const [sessionCatchUpRetrying, setSessionCatchUpRetrying] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -281,6 +285,7 @@ export function AppHomePage() {
     if (!uid) {
       accountedSessionIdsRef.current = null
       catchUpPassRef.current = null
+      setSessionCatchUpError(null)
       return
     }
     if (activitiesLoading) return
@@ -320,25 +325,40 @@ export function AppHomePage() {
     // No accounted baseline (or a new scope) ⇒ the probe pass: read the
     // identity set, write NOTHING.
     const accounted = probed ? accountedSessionIdsRef.current ?? undefined : undefined
-    void syncMissedCompletionsForUser(activityIds, accounted)
-      .then((result) => {
-        if (cancelled) return
-        const next = new Set(accountedSessionIdsRef.current ?? [])
-        for (const sessionId of result.observedSessionIds) next.add(sessionId)
-        accountedSessionIdsRef.current = next
-      })
-      .catch((caught: unknown) => {
-        // Non-fatal, exactly like the room-scoped trigger: statistics keep
-        // working from whatever is materialized, nothing is accounted (so a
-        // later pass retries), and the existing recovery paths — re-entering
-        // the room, next launch — are unaffected.
-        console.warn('[sessions] live catch-up failed:', caught)
-      })
+    void runSessionCatchUp(activityIds, accounted, () => cancelled)
 
     return () => {
       cancelled = true
     }
   }, [uid, activitiesLoading, activities])
+
+  const runSessionCatchUp = async (
+    activityIds: string[],
+    accountedSessionIds: ReadonlySet<string> | undefined,
+    isCancelled: () => boolean,
+  ): Promise<boolean> => {
+    if (catchUpInFlightRef.current) return false
+    catchUpInFlightRef.current = true
+    setSessionCatchUpError(null)
+    try {
+      const result = await syncMissedCompletionsForUser(activityIds, accountedSessionIds)
+      if (isCancelled()) return false
+      const next = new Set(accountedSessionIdsRef.current ?? [])
+      for (const sessionId of result.observedSessionIds) next.add(sessionId)
+      accountedSessionIdsRef.current = next
+      setSessionCatchUpError(null)
+      return true
+    } catch {
+      if (!isCancelled()) {
+        setSessionCatchUpError(
+          'Your study history may be out of date. Your other Home data is still available.',
+        )
+      }
+      return false
+    } finally {
+      catchUpInFlightRef.current = false
+    }
+  }
 
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
 
@@ -380,6 +400,25 @@ export function AppHomePage() {
   const handleRetryActivities = () => {
     if (!claimRetry(activitiesRetryGuardRef.current)) return
     setActivitiesAttempt((attempt) => attempt + 1)
+  }
+
+  const handleRetrySessionCatchUp = () => {
+    if (!claimRetry(catchUpRetryGuardRef.current)) return
+    if (!uid || activitiesLoading || !catchUpPassRef.current) {
+      releaseRetry(catchUpRetryGuardRef.current)
+      return
+    }
+
+    const activityIds = activities.map((activity) => activity.id)
+    const previous = catchUpPassRef.current
+    const activityKey = activityIds.slice().sort().join('\u0000')
+    const probed = previous.uid === uid && previous.activityKey === activityKey
+    const accounted = probed ? accountedSessionIdsRef.current ?? undefined : undefined
+    setSessionCatchUpRetrying(true)
+    void runSessionCatchUp(activityIds, accounted, () => false).finally(() => {
+      releaseRetry(catchUpRetryGuardRef.current)
+      setSessionCatchUpRetrying(false)
+    })
   }
 
   // UX-004: first click — open the confirmation. Deletes nothing.
@@ -618,6 +657,23 @@ export function AppHomePage() {
             </div>
           ) : (
             <StatsSummary statistics={statistics} />
+          )}
+
+          {sessionCatchUpError && (
+            <div
+              role="alert"
+              className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-center"
+            >
+              <p className="text-xs text-amber-800">{sessionCatchUpError}</p>
+              <button
+                type="button"
+                onClick={handleRetrySessionCatchUp}
+                disabled={sessionCatchUpRetrying}
+                className="mt-2 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 shadow-sm transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sessionCatchUpRetrying ? 'Trying again…' : RETRY_LABEL}
+              </button>
+            </div>
           )}
 
           {/* Study History Section */}
