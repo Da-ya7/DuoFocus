@@ -6,7 +6,10 @@
 import { describe, expect, it } from 'vitest'
 import { FirebaseError } from 'firebase/app'
 
-import { getFriendlyAuthErrorMessage } from '../../src/utils/authErrors'
+import {
+  getFriendlyAuthErrorMessage,
+  getFriendlyPasswordResetErrorMessage,
+} from '../../src/utils/authErrors'
 import { friendlyTimerError } from '../../src/services/timerErrors'
 import { RoomError } from '../../src/types/room'
 import { TimerError } from '../../src/types/timer'
@@ -78,6 +81,33 @@ describe('getFriendlyAuthErrorMessage', () => {
     )
     expect(getFriendlyAuthErrorMessage(new Error('Custom validation message'))).toBe('Custom validation message')
     expect(getFriendlyAuthErrorMessage(new Error(''))).toBe('Something went wrong. Please try again.')
+  })
+})
+
+describe('getFriendlyPasswordResetErrorMessage', () => {
+  it('maps reset-specific Firebase failures without exposing account existence', () => {
+    expect(getFriendlyPasswordResetErrorMessage(fbError('auth/invalid-email'))).toBe(
+      'Please enter a valid email address.',
+    )
+    expect(getFriendlyPasswordResetErrorMessage(fbError('auth/user-not-found'))).toBe(
+      'Something went wrong. Please try again.',
+    )
+    expect(getFriendlyPasswordResetErrorMessage(fbError('auth/too-many-requests'))).toBe(
+      'Too many requests. Please try again later.',
+    )
+    expect(getFriendlyPasswordResetErrorMessage(fbError('auth/network-request-failed'))).toBe(
+      'Network error. Please check your internet connection.',
+    )
+    expect(getFriendlyPasswordResetErrorMessage(fbError('auth/invalid-request'))).toBe(
+      'Something went wrong. Please try again.',
+    )
+  })
+
+  it('never exposes raw or non-Firebase reset errors', () => {
+    expect(getFriendlyPasswordResetErrorMessage(new Error('raw SDK detail'))).toBe(
+      'Something went wrong. Please try again.',
+    )
+    expect(getFriendlyPasswordResetErrorMessage(null)).toBe('Something went wrong. Please try again.')
   })
 })
 
