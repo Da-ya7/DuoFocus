@@ -16,7 +16,11 @@ import {
   roomActionsEnabled,
   type ActiveRoomLookup,
 } from '../utils/roomEntryUi'
-import { deleteUserSession, subscribeUserSessions } from '../services/sessions'
+import {
+  deleteUserSession,
+  subscribeUserSessions,
+  syncMissedCompletionsForUser,
+} from '../services/sessions'
 import { subscribeToUserActivitySummaries } from '../services/activities'
 import { calculateStudyStatistics } from '../utils/stats'
 import { resolveRoomTopic } from '../utils/activityUi'
@@ -47,6 +51,16 @@ function friendlyRoomError(error: unknown): string {
   }
   // Never surface raw Firebase/technical messages in the UI.
   return 'Something went wrong. Please try again.'
+}
+
+/** What the last Home session catch-up pass observed, for the next one. */
+interface CatchUpPass {
+  /** Identity the pass belonged to; a change resets the whole lifecycle. */
+  uid: string
+  /** Summed focus seconds of the member activities — the new-evidence signal. */
+  signal: number
+  /** Sorted member activity IDs — the evidence scope the pass was read for. */
+  activityKey: string
 }
 
 export function AppHomePage() {
@@ -107,6 +121,12 @@ export function AppHomePage() {
   const [activitiesError, setActivitiesError] = useState<string | null>(null)
   const activitiesRetryGuardRef = useRef<RetryGuardRef>({ current: false })
   const [activitiesAttempt, setActivitiesAttempt] = useState(0)
+
+  // UX-016 (live session catch-up): the deterministic session IDs this Home
+  // lifecycle has accounted for, plus what the last pass observed. See the
+  // catch-up effect below.
+  const accountedSessionIdsRef = useRef<Set<string> | null>(null)
+  const catchUpPassRef = useRef<CatchUpPass | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -233,6 +253,92 @@ export function AppHomePage() {
       },
     )
   }, [uid, activitiesAttempt])
+
+  // UX-016 (live session catch-up) — the UPSTREAM half of the realtime story.
+  //
+  // The two subscriptions above make Home *fresh*; they cannot make it *right*,
+  // because a personal session only exists once it has been materialized from
+  // completion evidence, and the only trigger was RoomPage. A user who stays on
+  // Home while the shared timer completes therefore kept stale statistics until
+  // they re-entered the room. This effect closes that gap by re-reading the
+  // EXISTING evidence — using the activity subscription above as its signal, so
+  // no third listener and no polling is introduced.
+  //
+  // Deletion safety (why this is NOT a blind reconciliation): sessions are
+  // deletable user records and nothing tombstones them, so "deleted" and "never
+  // recorded" look identical in the data. The FIRST pass per Home lifecycle is
+  // therefore a PROBE: it learns the deterministic session IDs the caller's own
+  // evidence maps to and writes NOTHING, so evidence that predates Home —
+  // including a session deleted before Home opened — is never written back.
+  // Every later pass ignores all previously accounted IDs (the set is only ever
+  // unioned), so a session deleted while Home is open stays deleted and only
+  // evidence observed for the first time in this lifecycle can be materialized.
+  // A pass whose ACTIVITY SCOPE differs from the one it probed is treated as a
+  // probe again, so an incomplete first snapshot can never pass long-standing
+  // evidence off as new. The mismatch is decided by deterministic identity
+  // (roomId_completionId), never by comparing aggregate counts.
+  useEffect(() => {
+    if (!uid) {
+      accountedSessionIdsRef.current = null
+      catchUpPassRef.current = null
+      return
+    }
+    if (activitiesLoading) return
+
+    // Identity change (logout / user switch): nothing the previous user
+    // accounted for may gate this one.
+    if (catchUpPassRef.current && catchUpPassRef.current.uid !== uid) {
+      accountedSessionIdsRef.current = null
+      catchUpPassRef.current = null
+    }
+
+    // Completion evidence is append-only (immutable and undeletable by rules),
+    // so the summed focus seconds of the member activities is the cheapest
+    // faithful signal that NEW evidence exists. A rename or a re-delivered
+    // identical snapshot leaves it untouched and re-reads nothing.
+    const signal = activities.reduce((total, item) => total + item.totalFocusSeconds, 0)
+    // The evidence scope this pass is authorized to read: the member activity
+    // set, order-insensitive.
+    const activityKey = activities
+      .map((activity) => activity.id)
+      .sort()
+      .join('\u0000')
+
+    const previous = catchUpPassRef.current
+    if (previous && previous.uid === uid && previous.signal === signal) return
+
+    // A pass may only WRITE for an activity set this lifecycle has already
+    // probed. A set that GREW (or a first snapshot that was still incomplete)
+    // could otherwise present long-standing evidence as "new" and re-derive a
+    // session the user had deleted, so any scope change is probed again first.
+    const probed = previous !== null && previous.uid === uid && previous.activityKey === activityKey
+    catchUpPassRef.current = { uid, signal, activityKey }
+
+    let cancelled = false
+    const activityIds = activities.map((activity) => activity.id)
+
+    // No accounted baseline (or a new scope) ⇒ the probe pass: read the
+    // identity set, write NOTHING.
+    const accounted = probed ? accountedSessionIdsRef.current ?? undefined : undefined
+    void syncMissedCompletionsForUser(activityIds, accounted)
+      .then((result) => {
+        if (cancelled) return
+        const next = new Set(accountedSessionIdsRef.current ?? [])
+        for (const sessionId of result.observedSessionIds) next.add(sessionId)
+        accountedSessionIdsRef.current = next
+      })
+      .catch((caught: unknown) => {
+        // Non-fatal, exactly like the room-scoped trigger: statistics keep
+        // working from whatever is materialized, nothing is accounted (so a
+        // later pass retries), and the existing recovery paths — re-entering
+        // the room, next launch — are unaffected.
+        console.warn('[sessions] live catch-up failed:', caught)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [uid, activitiesLoading, activities])
 
   const statistics = useMemo(() => calculateStudyStatistics(sessions), [sessions])
 
