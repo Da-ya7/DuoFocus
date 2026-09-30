@@ -1,8 +1,21 @@
+import { useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 export function AppLayout() {
   const { user, loading, logout } = useAuth()
+  const [logoutState, setLogoutState] = useState<'idle' | 'signing-out' | 'error'>('idle')
+
+  const handleLogout = async () => {
+    if (logoutState === 'signing-out') return
+
+    setLogoutState('signing-out')
+    try {
+      await logout()
+    } catch {
+      setLogoutState('error')
+    }
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
@@ -21,13 +34,21 @@ export function AppLayout() {
                 >
                   App
                 </Link>
-                <button
-                  type="button"
-                  onClick={() => logout()}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Logout
-                </button>
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    disabled={logoutState === 'signing-out'}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {logoutState === 'signing-out' ? 'Signing out…' : 'Logout'}
+                  </button>
+                  {logoutState === 'error' && (
+                    <span role="alert" className="text-right text-xs text-red-700">
+                      Couldn't sign out. Please try again.
+                    </span>
+                  )}
+                </div>
               </>
             ) : (
               <>
