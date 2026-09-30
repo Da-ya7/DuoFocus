@@ -64,12 +64,12 @@ interface CatchUpPass {
 }
 
 export function AppHomePage() {
-  const { user, logout } = useAuth()
+  const { user } = useAuth()
   const navigate = useNavigate()
 
   const [code, setCode] = useState('')
   const [topic, setTopic] = useState('')
-  const [busy, setBusy] = useState<'create' | 'join' | 'logout' | null>(null)
+  const [busy, setBusy] = useState<'create' | 'join' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const uid = user?.uid ?? null
@@ -418,17 +418,6 @@ export function AppHomePage() {
   const normalizedCode = useMemo(() => normalizeRoomCode(code), [code])
   const codeIsValid = isValidRoomCode(normalizedCode)
 
-  const handleLogout = async () => {
-    setError(null)
-    setBusy('logout')
-    try {
-      await logout()
-      navigate('/login', { replace: true })
-    } catch {
-      navigate('/login', { replace: true })
-    }
-  }
-
   const handleCreate = async () => {
     // Belt and braces: the control is not rendered unless the lookup resolved
     // with no room, and this guard keeps a stray programmatic click inert too.
@@ -714,15 +703,6 @@ export function AppHomePage() {
             />
           )}
         </div>
-
-        <button
-          type="button"
-          onClick={handleLogout}
-          disabled={busy !== null}
-          className="mt-6 w-full text-xs font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50"
-        >
-          {busy === 'logout' ? 'Signing out…' : 'Logout'}
-        </button>
       </div>
 
     </section>
