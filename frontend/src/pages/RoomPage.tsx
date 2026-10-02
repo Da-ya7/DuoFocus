@@ -36,6 +36,7 @@ import { PartnerPresence } from '../components/room/PartnerPresence'
 import { StatusAnnouncer, useStatusAnnouncement } from '../components/StatusAnnouncer'
 import { formatClock } from '../utils/time'
 import { timerStatusAnnouncement } from '../utils/announceUi'
+import { TOUCH_TARGET_CLASSES } from '../utils/touchTargetUi'
 
 /** Milliseconds between local countdown re-renders (visual only). */
 const TICK_MS = 250
@@ -522,12 +523,15 @@ export function RoomPage() {
             route to Activity Detail. A semantic React Router <Link> (real
             anchor, keyboard accessible, visible text) — the activity name and
             the Rename control above are untouched, and no timer, membership,
-            or destructive control is part of this navigation target. */}
+            or destructive control is part of this navigation target. 11.23
+            (N-10): the link keeps its label, semantics, colours, and
+            focus-visible outline and only gains the shared 44px touch target
+            (it was ~33px tall before). */}
         {activityId && (
           <div className="mt-4 border-t border-slate-100 pt-4 text-center">
             <Link
               to={activityDetailPath(activityId)}
-              className="inline-block rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50"
+              className={`${TOUCH_TARGET_CLASSES} rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50`}
             >
               {ACTIVITY_DETAIL_LINK_LABEL}
             </Link>

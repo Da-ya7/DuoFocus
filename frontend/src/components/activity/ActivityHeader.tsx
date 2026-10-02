@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { ACTIVITY_NAME_MAX_LENGTH } from '../../types/activity'
 import { friendlyActivityError } from '../../utils/activityUi'
+import { TOUCH_TARGET_CLASSES } from '../../utils/touchTargetUi'
 
 export interface ActivityHeaderProps {
   /** Current activity name, read from the activity document; null while unknown. */
@@ -85,7 +86,7 @@ export function ActivityHeader({ name, canRename, onRename }: ActivityHeaderProp
           <button
             type="submit"
             disabled={saving}
-            className="flex-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            className={`${TOUCH_TARGET_CLASSES} flex-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60`}
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -93,7 +94,7 @@ export function ActivityHeader({ name, canRename, onRename }: ActivityHeaderProp
             type="button"
             onClick={cancelEditing}
             disabled={saving}
-            className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className={`${TOUCH_TARGET_CLASSES} flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60`}
           >
             Cancel
           </button>
@@ -120,10 +121,13 @@ export function ActivityHeader({ name, canRename, onRename }: ActivityHeaderProp
       </h1>
       {canRename && (
         <div className="mt-3 text-center">
+          {/* 11.23 (N-10): this small text control keeps its look (padding,
+              type, colours, hover) and only gains the shared 44px touch
+              target — it was ~29px tall before. */}
           <button
             type="button"
             onClick={startEditing}
-            className="rounded px-2 py-1 text-xs font-medium text-slate-500 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 hover:bg-slate-50 hover:text-slate-700"
+            className={`${TOUCH_TARGET_CLASSES} rounded px-2 py-1 text-xs font-medium text-slate-500 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 hover:bg-slate-50 hover:text-slate-700`}
           >
             Rename
           </button>
