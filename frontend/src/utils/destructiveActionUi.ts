@@ -119,6 +119,13 @@ export interface LeaveRoomConfirmation {
  * member → the caller leaves and the partner stays. Because the copy is
  * recomputed from the live snapshot, it follows membership changes while the
  * confirmation is open (e.g. the partner leaving first).
+ *
+ * N-11 (copy truthfulness): leaving removes the caller's activity membership,
+ * and activity/completion reads are membership-scoped — so after leaving, the
+ * shared activity's history is no longer readable by the former member. The
+ * copy states exactly that, and separately affirms what IS preserved: the
+ * caller's own recorded sessions under their account (personal study
+ * history). It never implies continued access to the shared activity.
  */
 export function describeLeaveRoom(
   memberIds: readonly string[] | null | undefined,
@@ -132,7 +139,7 @@ export function describeLeaveRoom(
       soleMember,
       prompt: 'Leave this room?',
       message:
-        'You are the last member. Leaving permanently deletes this room and its room code. Your study activity and history are kept.',
+        'You are the last member. Leaving permanently deletes this room and its room code. It also ends your membership of this activity, so its shared history will no longer be visible to you. Your own recorded study sessions remain in your personal study history.',
       confirmLabel: 'Leave and delete room',
       cancelLabel: 'Cancel leaving the room',
     }
@@ -142,7 +149,7 @@ export function describeLeaveRoom(
     soleMember,
     prompt: 'Leave this room?',
     message:
-      'You will leave this room. Your partner stays and keeps studying with the same room code.',
+      'You will leave this room. Your partner stays and keeps studying with the same room code. Leaving also ends your membership of this activity, so its shared history will no longer be visible to you. Your own recorded study sessions remain in your personal study history.',
     confirmLabel: 'Leave room',
     cancelLabel: 'Cancel leaving the room',
   }

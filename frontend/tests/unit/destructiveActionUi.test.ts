@@ -18,6 +18,10 @@
  *     per row (never colour-only)
  *   - the leave-room copy: sole member (room + code permanently deleted) vs.
  *     two members (partner stays)
+ *   - Phase 11.22 (N-11): the copy is TRUTHFUL about what leaving preserves —
+ *     personal recorded sessions are kept, but the shared activity's history
+ *     is no longer visible to the former member (membership-scoped reads), so
+ *     no variant may claim the user keeps shared activity history
  *
  * No Firebase, no emulator, no DOM.
  */
@@ -223,5 +227,71 @@ describe('leave-room confirmation copy (UX-018)', () => {
       expect(copy.confirmLabel.trim().length).toBeGreaterThan(0)
       expect(copy.cancelLabel.trim().length).toBeGreaterThan(0)
     }
+  })
+
+  // ---- Phase 11.22 (N-11): truthful post-leave consequences ----------------
+  // Activity/completion reads are membership-scoped, so after leaving the
+  // shared activity's history is NOT readable by the former member. The copy
+  // must never claim otherwise, and must affirm only what is truly kept: the
+  // caller's own recorded sessions under their account.
+  describe('N-11: post-leave wording is truthful', () => {
+    const FORBIDDEN = [
+      /your (study )?activity (and|&) history are kept/i,
+      /your history will be kept/i,
+      /your activity will be kept/i,
+      /nothing will be lost/i,
+      /no(thing|ne) (will be )?lost/i,
+    ]
+
+    const allVariants = (): ReturnType<typeof describeLeaveRoom>[] => [
+      describeLeaveRoom([SOLE], SOLE), // sole member (room deleted)
+      describeLeaveRoom([SOLE, PARTNER], SOLE), // two members (partner stays)
+    ]
+
+    it('two-member warning does NOT claim the former member keeps access to the shared activity history', () => {
+      const copy = describeLeaveRoom([SOLE, PARTNER], SOLE)
+      for (const forbidden of FORBIDDEN) {
+        expect(forbidden.test(copy.message)).toBe(false)
+      }
+      expect(copy.message).toMatch(/shared history/i)
+      expect(copy.message).toMatch(/no longer (be )?visible/i)
+      expect(copy.message).toMatch(/ends your membership/i)
+    })
+
+    it('sole-member warning does NOT claim the former member keeps access to the shared activity history', () => {
+      const copy = describeLeaveRoom([SOLE], SOLE)
+      for (const forbidden of FORBIDDEN) {
+        expect(forbidden.test(copy.message)).toBe(false)
+      }
+      expect(copy.message).toMatch(/shared history/i)
+      expect(copy.message).toMatch(/no longer (be )?visible/i)
+      expect(copy.message).toMatch(/ends your membership/i)
+    })
+
+    it('both variants accurately communicate that personal recorded sessions are preserved', () => {
+      for (const copy of allVariants()) {
+        expect(copy.message).toMatch(/your own recorded study sessions/i)
+        expect(copy.message).toMatch(/personal study history/i)
+      }
+    })
+
+    it('existing leave behavior (labels, sole-member classification, prompts) is unchanged', () => {
+      const sole = describeLeaveRoom([SOLE], SOLE)
+      const shared = describeLeaveRoom([SOLE, PARTNER], SOLE)
+      // UX-018 consequence semantics unchanged.
+      expect(sole.soleMember).toBe(true)
+      expect(shared.soleMember).toBe(false)
+      expect(sole.prompt).toMatch(/leave this room/i)
+      expect(shared.prompt).toMatch(/leave this room/i)
+      expect(sole.confirmLabel).toMatch(/leave and delete room/i)
+      expect(shared.confirmLabel).toMatch(/^leave room$/i)
+      expect(sole.confirmLabel).not.toBe(shared.confirmLabel)
+      expect(sole.cancelLabel).toBe(shared.cancelLabel)
+      // The pre-existing partner-stays statement is preserved verbatim.
+      expect(shared.message).toMatch(/partner stays and keeps studying with the same room code/i)
+      // The sole-member room-deletion warning is preserved verbatim.
+      expect(sole.message).toMatch(/last member/i)
+      expect(sole.message).toMatch(/permanently deletes this room and its room code/i)
+    })
   })
 })
