@@ -11,6 +11,7 @@ import {
   resolveSessionActivity,
   type SessionActivityLookup,
 } from '../../utils/activityContextUi'
+import { TOUCH_TARGET_CLASSES } from '../../utils/touchTargetUi'
 import type { HomeEmptyState } from '../../utils/homeUi'
 
 export interface SessionHistoryProps {
@@ -179,6 +180,10 @@ export function SessionHistory({
             </div>
 
             {canDelete && (
+              // 11.24 (N-10 follow-up): the three UX-004 controls below keep
+              // their typography, colours, padding, handlers, disabled logic,
+              // and accessible names — they only gain the shared 44px touch
+              // target (they were ~29px tall before).
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                 {phase === 'idle' ? (
                   <button
@@ -186,7 +191,7 @@ export function SessionHistory({
                     type="button"
                     onClick={() => onRequestDelete?.(session.id)}
                     aria-label={labels.request}
-                    className="rounded px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 hover:text-red-700"
+                    className={`${TOUCH_TARGET_CLASSES} rounded px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 hover:text-red-700`}
                   >
                     Delete
                   </button>
@@ -205,7 +210,7 @@ export function SessionHistory({
                       onClick={() => onCancelDelete?.()}
                       disabled={!canCancelSessionDelete(phase)}
                       aria-label={labels.cancel}
-                      className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      className={`${TOUCH_TARGET_CLASSES} rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       Cancel
                     </button>
@@ -214,7 +219,7 @@ export function SessionHistory({
                       onClick={() => onConfirmDelete?.(session.id)}
                       disabled={!canConfirmSessionDelete(phase)}
                       aria-label={labels.confirm}
-                      className="rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      className={`${TOUCH_TARGET_CLASSES} rounded bg-red-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       {phase === 'deleting' ? 'Deleting…' : 'Delete'}
                     </button>
