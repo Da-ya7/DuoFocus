@@ -142,6 +142,41 @@ The rules enforce: member-only room reads, join only into a one-member room by a
 
 Activity statistics read completion evidence across all rooms with a collection-group query filtered on `activityId`, which requires the collection-group index declared in [`firestore.indexes.json`](firestore.indexes.json). The index is configured in the repository but **has not yet been deployed to production** — deploying it (`firebase deploy --only firestore:indexes`, after `firebase login`) remains a pending, explicitly approved deployment step. Activity statistics queries work against the emulator, which does not enforce production index requirements; they will fail against production Firestore until the index is deployed.
 
+### Production Firebase Authentication Setup
+
+DuoFocus has **no backend**: sign-in *and* password recovery are entirely Firebase-managed. The reset flow is a single client call — `sendPasswordResetEmail(auth, email)` in [`frontend/src/context/AuthContext.tsx`](frontend/src/context/AuthContext.tsx) — with **no `actionCodeSettings`**, no `oobCode` handling, and no `confirmPasswordReset` in application code. The reset email therefore points at **Firebase's hosted authentication action handler**, which renders the form and completes the reset; the DuoFocus SPA only requests the email and shows the result.
+
+Everything below lives in the Firebase Console and **cannot be verified from this repository**. Confirm each item against the production project before relying on password recovery in production.
+
+**Firebase project** — the production Firebase project is the deployment target; the CLI alias is pinned in [`.firebaserc`](.firebaserc). Client configuration comes from `frontend/.env`, documented by [`frontend/.env.example`](frontend/.env.example) (`VITE_FIREBASE_*`). Real values stay in `.env` (gitignored); never commit them or any service-account credential.
+
+**Authentication provider** — Firebase Authentication → *Sign-in method* must have **Email/Password** enabled. Verify in Console.
+
+**Authorized domains** — Firebase Authentication → *Settings → Authorized domains* must list the domain(s) of the deployed application, since they back the Firebase authentication flow. The hosting domain is not recorded in this repository: verify in Console.
+
+**Password-reset email template** — configure the reset template and its sender under Firebase Authentication → *Email templates*, and verify the sender identity for the project. Verify in Console.
+
+**Password-reset Action URL** — the application supplies none (no `actionCodeSettings`), so keep the template's **Action URL on Firebase's hosted default handler** unless DuoFocus is deliberately redesigned to handle `oobCode`/`confirmPasswordReset` itself. ⚠️ Pointing the Action URL at the DuoFocus SPA **would not work today**: the SPA has no password-reset action-code route, so a user landing there could not complete the reset.
+
+**Production environment** — the `VITE_FIREBASE_*` values used for the production build must match the intended Firebase project. `VITE_USE_FIREBASE_EMULATORS=true` is **test-only** (see `frontend/.env.test.example`); production builds must leave it unset, in which case the bundle contains no emulator connection at all.
+
+**Emulator vs production** — the regression suite proves the reset *contract* (request → code → confirm → new sign-in) against the Auth emulator, which **cannot send email**. Green tests therefore do not prove production email delivery; that must be tested safely against the production project.
+
+**Security** — DuoFocus stores no reset token and never receives a password, because there is no DuoFocus backend. The reset UI masks `auth/user-not-found` so the form cannot be used as an account-existence oracle. **Email enumeration protection** in the Firebase Console is an additional defense-in-depth control; its status is not recorded here and must be checked in Console.
+
+**Pre-deployment checklist**
+
+- [ ] Production Firebase project selected (`.firebaserc`, `VITE_FIREBASE_PROJECT_ID`)
+- [ ] Email/Password enabled
+- [ ] Authorized domains configured
+- [ ] Password-reset email template configured
+- [ ] Sender identity verified/configured
+- [ ] Action URL remains the Firebase-hosted default handler
+- [ ] Production `VITE_FIREBASE_*` values verified
+- [ ] `VITE_USE_FIREBASE_EMULATORS` not enabled in production
+- [ ] Email enumeration protection status verified
+- [ ] Real production password-reset delivery tested safely
+
 ### Verify the Installation
 
 | Service | URL | Expected |

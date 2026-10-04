@@ -10,7 +10,7 @@ Thanks for helping build DuoFocus! This is a small, private two-person project, 
    cd frontend
    npm install
    ```
-3. **Firebase setup** — create a Firebase project, enable Email/Password sign-in, and fill in `frontend/.env` (see `frontend/.env.example`). Deploy the security rules from the repo root:
+3. **Firebase setup** — create a Firebase project, enable Email/Password sign-in, and fill in `frontend/.env` (see `frontend/.env.example`). For the Console-side password-recovery prerequisites, see [Production Firebase Authentication Setup](README.md#production-firebase-authentication-setup). Deploy the security rules from the repo root:
    ```bash
    firebase deploy --only firestore:rules
    ```
