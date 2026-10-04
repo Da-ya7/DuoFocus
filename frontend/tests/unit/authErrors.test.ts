@@ -11,6 +11,8 @@ import {
   getFriendlyAuthErrorMessage,
   getFriendlyPasswordResetErrorMessage,
   passwordResetFailure,
+  registrationFailure,
+  REGISTRATION_DUPLICATE_MESSAGE,
 } from '../../src/utils/authErrors'
 import { friendlyTimerError } from '../../src/services/timerErrors'
 import { RoomError } from '../../src/types/room'
@@ -222,5 +224,86 @@ describe('LoginPage reset wiring (source contract, Phase 11.27)', () => {
 
   it('never assigns a raw error object to the UI', () => {
     expect(loginPageSource).not.toMatch(/setError\(\s*(err|error|e)\s*\)/)
+  })
+})
+
+describe('registrationFailure (Phase 11.30 — account-enumeration mask)', () => {
+  it('A: auth/email-already-in-use maps to the generic message with no existence-revealing wording', () => {
+    const message = registrationFailure(
+      new FirebaseError('auth/email-already-in-use', 'The email address is already in use by another account.'),
+    )
+
+    expect(message).toBe(REGISTRATION_DUPLICATE_MESSAGE)
+    expect(message).toBe('Unable to create your account. Please try again or sign in instead.')
+
+    const lower = message.toLowerCase()
+    for (const forbidden of ['already exists', 'already registered', 'account exists', 'already', 'in use', 'taken', 'registered']) {
+      expect(lower).not.toContain(forbidden)
+    }
+    expect(message).not.toContain('auth/')
+    expect(message).not.toContain('already in use')
+    // Never the raw Firebase SDK text.
+    expect(message).not.toContain('another account')
+  })
+
+  it('B–E: weak-password, invalid-email, too-many-requests and network failures keep their exact messages', () => {
+    expect(registrationFailure(fbError('auth/weak-password'))).toBe(
+      "Password does not meet Firebase's requirements.",
+    )
+    expect(registrationFailure(fbError('auth/invalid-email'))).toBe('Please enter a valid email address.')
+    expect(registrationFailure(fbError('auth/too-many-requests'))).toBe(
+      'Too many unsuccessful login attempts. Please try again later.',
+    )
+    expect(registrationFailure(fbError('auth/network-request-failed'))).toBe(
+      'Network error. Please check your internet connection.',
+    )
+  })
+
+  it('F: an unknown Firebase code keeps the existing generic fallback', () => {
+    expect(registrationFailure(fbError('auth/unknown-code-xyz'))).toBe(
+      'Something went wrong. Please try again.',
+    )
+    expect(registrationFailure(fbError('auth/internal-error'))).not.toContain('sdk message')
+  })
+
+  it('G: non-Firebase inputs behave exactly as the shared mapper did before', () => {
+    for (const input of [new Error('Custom validation message'), new Error(''), null, undefined, 42, { code: 'auth/invalid-credential' }]) {
+      expect(registrationFailure(input)).toBe(getFriendlyAuthErrorMessage(input))
+    }
+    expect(registrationFailure(null)).toBe('Something went wrong. Please try again.')
+  })
+
+  it('H: login mappings remain unchanged — the general mapper still says what it always said', () => {
+    expect(getFriendlyAuthErrorMessage(fbError('auth/email-already-in-use'))).toBe(
+      'An account with this email already exists.',
+    )
+    expect(getFriendlyAuthErrorMessage(fbError('auth/user-not-found'))).toBe('Invalid email or password.')
+    expect(getFriendlyAuthErrorMessage(fbError('auth/invalid-credential'))).toBe('Invalid email or password.')
+  })
+
+  it('I: password-reset mappings remain unchanged by the registration mask', () => {
+    expect(passwordResetFailure(fbError('auth/user-not-found'))).toEqual({ sent: true })
+    expect(passwordResetFailure(fbError('auth/invalid-email'))).toEqual({
+      sent: false,
+      message: 'Please enter a valid email address.',
+    })
+    expect(getFriendlyPasswordResetErrorMessage(fbError('auth/user-not-found'))).toBe(
+      'Something went wrong. Please try again.',
+    )
+  })
+})
+
+describe('RegisterPage registration wiring (source contract, Phase 11.30)', () => {
+  const registerPageSource = readFileSync(new URL('../../src/pages/RegisterPage.tsx', import.meta.url), 'utf8')
+
+  it('routes registration failures through registrationFailure()', () => {
+    expect(registerPageSource).toContain('setError(registrationFailure(err))')
+    expect(registerPageSource).not.toContain('getFriendlyAuthErrorMessage')
+  })
+
+  it('adds no new page state and never assigns a raw error object', () => {
+    expect(registerPageSource).not.toMatch(/setError\(\s*(err|error|e)\s*\)/)
+    // email, password, confirmPassword, error, isSubmitting — unchanged count.
+    expect(registerPageSource.match(/useState(\(|<)/g) ?? []).toHaveLength(5)
   })
 })

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { getFriendlyAuthErrorMessage } from '../utils/authErrors'
+import { registrationFailure } from '../utils/authErrors'
 import { REGISTER_TITLE } from '../utils/pageTitleUi'
 
 export function RegisterPage() {
@@ -49,7 +49,8 @@ export function RegisterPage() {
       await register(trimmedEmail, password)
       navigate('/app', { replace: true })
     } catch (err) {
-      setError(getFriendlyAuthErrorMessage(err))
+      // Phase 11.30 — a duplicate email must not confirm account existence.
+      setError(registrationFailure(err))
     } finally {
       setIsSubmitting(false)
     }

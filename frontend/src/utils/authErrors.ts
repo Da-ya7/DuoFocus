@@ -69,3 +69,28 @@ export function passwordResetFailure(error: unknown): PasswordResetResult {
 
   return { sent: false, message: getFriendlyPasswordResetErrorMessage(error) }
 }
+
+/** Generic sign-up failure shown instead of disclosing that an email is taken. */
+export const REGISTRATION_DUPLICATE_MESSAGE =
+  'Unable to create your account. Please try again or sign in instead.'
+
+/**
+ * Phase 11.30 — account-enumeration mask for the registration form.
+ *
+ * auth/email-already-in-use states that an address belongs to an existing
+ * account, which turns sign-up into an account probe (Phase 11.29 audit).
+ * That single code returns one generic, actionable message that never
+ * confirms account existence.
+ *
+ * Every other failure keeps its existing behavior — weak password, invalid
+ * email, rate limiting, network failure, unknown Firebase codes and
+ * non-Firebase errors all map exactly as before. Raw Firebase SDK text is
+ * never returned.
+ */
+export function registrationFailure(error: unknown): string {
+  if (error instanceof FirebaseError && error.code === 'auth/email-already-in-use') {
+    return REGISTRATION_DUPLICATE_MESSAGE
+  }
+
+  return getFriendlyAuthErrorMessage(error)
+}

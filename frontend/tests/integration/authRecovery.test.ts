@@ -39,7 +39,12 @@ import {
   listRoomCodes,
   resetIntegrationState,
 } from './helpers'
-import { getFriendlyAuthErrorMessage, passwordResetFailure } from '../../src/utils/authErrors'
+import {
+  getFriendlyAuthErrorMessage,
+  passwordResetFailure,
+  registrationFailure,
+  REGISTRATION_DUPLICATE_MESSAGE,
+} from '../../src/utils/authErrors'
 
 /** Run-unique address: warm-emulator-safe (Auth accounts outlive a vitest run). */
 function uniqueEmail(tag: string): string {
@@ -218,5 +223,42 @@ describe('account-enumeration mask (Phase 11.27)', () => {
     // Still the login mapping — the reset mask does not apply here.
     expect(getFriendlyAuthErrorMessage(rejection)).toBe('Invalid email or password.')
     expect(getFriendlyAuthErrorMessage(rejection)).not.toBe('Something went wrong. Please try again.')
+  })
+})
+
+describe('registration enumeration mask (Phase 11.30)', () => {
+  it('a genuine duplicate registration is rejected by Firebase and mapped to the generic message', async () => {
+    const email = uniqueEmail('dup')
+    await createUserWithEmailAndPassword(auth, email, 'TestPassword123!')
+    await signOut(auth)
+
+    // Real emulator behavior — no mocking: the second attempt must genuinely fail.
+    const rejection = await createUserWithEmailAndPassword(auth, email, 'AnotherPassword123!').catch(
+      (e: unknown) => e,
+    )
+    expect((rejection as { code?: string }).code).toBe('auth/email-already-in-use')
+
+    // The UI result discloses nothing about account existence.
+    const message = registrationFailure(rejection)
+    expect(message).toBe(REGISTRATION_DUPLICATE_MESSAGE)
+    expect(message).toBe('Unable to create your account. Please try again or sign in instead.')
+    expect(message.toLowerCase()).not.toMatch(/already|exists|registered|in use|taken/)
+    expect(message).not.toContain('auth/')
+    expect(message).not.toContain('another account')
+
+    // A failed sign-up creates no session and leaves the existing account intact.
+    expect(auth.currentUser).toBeNull()
+    const back = await signInWithEmailAndPassword(auth, email, 'TestPassword123!')
+    expect(back.user.email).toBe(email)
+    await signOut(auth)
+    expect(auth.currentUser).toBeNull()
+  })
+
+  it('a fresh registration still succeeds — the mask does not break sign-up', async () => {
+    const email = uniqueEmail('fresh')
+    const cred = await createUserWithEmailAndPassword(auth, email, 'TestPassword123!')
+    expect(cred.user.email).toBe(email)
+    expect(auth.currentUser?.uid).toBe(cred.user.uid)
+    await signOut(auth)
   })
 })
