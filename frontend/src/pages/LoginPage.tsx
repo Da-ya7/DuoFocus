@@ -1,10 +1,11 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   getFriendlyAuthErrorMessage,
   getFriendlyPasswordResetErrorMessage,
 } from '../utils/authErrors'
+import { SIGN_IN_TITLE } from '../utils/pageTitleUi'
 
 /**
  * Minimal shape gate shared by the login and password-reset forms (Phase
@@ -24,6 +25,12 @@ export function LoginPage() {
   const [resetSent, setResetSent] = useState(false)
   const [mode, setMode] = useState<'login' | 'reset'>('login')
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Phase 11.25: constant across both modes — the password-reset view is a
+  // step of the sign-in flow, not a different page.
+  useEffect(() => {
+    document.title = SIGN_IN_TITLE
+  }, [])
 
   const { login, resetPassword } = useAuth()
   const navigate = useNavigate()

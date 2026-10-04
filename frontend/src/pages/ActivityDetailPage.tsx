@@ -20,6 +20,11 @@ import {
   releaseRetry,
   type RetryGuardRef,
 } from '../utils/dataRetryUi'
+import {
+  ACTIVITY_TITLE_FALLBACK,
+  ACTIVITY_UNAVAILABLE_TITLE,
+  activityTitle,
+} from '../utils/pageTitleUi'
 
 /**
  * One activity's aggregated view — Phase 10.8 (data layer from Phase 10.7).
@@ -113,6 +118,23 @@ export function ActivityDetailPage() {
     },
     [activityId],
   )
+
+  // Phase 11.25: browser title, derived purely from state this page already
+  // holds. A rename updates the summary locally (handleRename) or arrives
+  // through the existing load, so the title follows the CURRENT name with no
+  // new listener, timer, or Firestore read.
+  const activityPageTitle =
+    !activityId || !uid
+      ? ACTIVITY_UNAVAILABLE_TITLE
+      : loading
+        ? ACTIVITY_TITLE_FALLBACK
+        : error || !summary
+          ? ACTIVITY_UNAVAILABLE_TITLE
+          : activityTitle(summary.name)
+
+  useEffect(() => {
+    document.title = activityPageTitle
+  }, [activityPageTitle])
 
   if (!activityId || !uid) {
     return (

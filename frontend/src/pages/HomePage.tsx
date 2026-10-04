@@ -1,8 +1,16 @@
+import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { HOME_TITLE } from '../utils/pageTitleUi'
 
 export function HomePage() {
   const { user, loading } = useAuth()
+
+  // Phase 11.25: the landing page's browser title (same app name as the
+  // authenticated home and the static index.html fallback).
+  useEffect(() => {
+    document.title = HOME_TITLE
+  }, [])
 
   return (
     <section className="flex flex-1 flex-col items-center justify-center gap-6 py-16 text-center">

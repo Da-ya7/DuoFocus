@@ -37,6 +37,11 @@ import { StatusAnnouncer, useStatusAnnouncement } from '../components/StatusAnno
 import { formatClock } from '../utils/time'
 import { timerStatusAnnouncement } from '../utils/announceUi'
 import { TOUCH_TARGET_CLASSES } from '../utils/touchTargetUi'
+import {
+  ROOM_TITLE_FALLBACK,
+  ROOM_UNAVAILABLE_TITLE,
+  roomTitle,
+} from '../utils/pageTitleUi'
 
 /** Milliseconds between local countdown re-renders (visual only). */
 const TICK_MS = 250
@@ -422,6 +427,21 @@ export function RoomPage() {
       leaveRequestRef.current?.focus()
     }
   }, [confirmingLeave])
+
+  // Phase 11.25: browser title, derived purely from state this page already
+  // holds — the route param, the auth user, the live room snapshot, and the
+  // two existing non-usable states. The code comes from the room document's
+  // own roomCode field, so no extra read or listener is added.
+  const roomPageTitle =
+    !roomId || !uid || listenerError
+      ? ROOM_UNAVAILABLE_TITLE
+      : room
+        ? roomTitle(room.roomCode)
+        : ROOM_TITLE_FALLBACK
+
+  useEffect(() => {
+    document.title = roomPageTitle
+  }, [roomPageTitle])
 
   if (!roomId || !uid) {
     return (

@@ -1,7 +1,8 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { getFriendlyAuthErrorMessage } from '../utils/authErrors'
+import { REGISTER_TITLE } from '../utils/pageTitleUi'
 
 export function RegisterPage() {
   const [email, setEmail] = useState('')
@@ -12,6 +13,11 @@ export function RegisterPage() {
 
   const { register } = useAuth()
   const navigate = useNavigate()
+
+  // Phase 11.25: browser title for the registration page.
+  useEffect(() => {
+    document.title = REGISTER_TITLE
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()

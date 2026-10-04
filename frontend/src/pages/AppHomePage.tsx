@@ -16,6 +16,7 @@ import {
   roomActionsEnabled,
   type ActiveRoomLookup,
 } from '../utils/roomEntryUi'
+import { HOME_TITLE } from '../utils/pageTitleUi'
 import {
   deleteUserSession,
   subscribeUserSessions,
@@ -131,6 +132,13 @@ export function AppHomePage() {
   const catchUpRetryGuardRef = useRef<RetryGuardRef>({ current: false })
   const [sessionCatchUpError, setSessionCatchUpError] = useState<string | null>(null)
   const [sessionCatchUpRetrying, setSessionCatchUpRetrying] = useState(false)
+
+  // Phase 11.25: the authenticated home shares Home's title (the bare app
+  // name), so signing in / logging out never leaves the auth page's title
+  // behind. No other state here is involved.
+  useEffect(() => {
+    document.title = HOME_TITLE
+  }, [])
 
   useEffect(() => {
     let cancelled = false

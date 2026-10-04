@@ -1,6 +1,13 @@
+import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { NOT_FOUND_TITLE } from '../utils/pageTitleUi'
 
 export function NotFoundPage() {
+  // Phase 11.25: browser title for the catch-all route.
+  useEffect(() => {
+    document.title = NOT_FOUND_TITLE
+  }, [])
+
   return (
     <section className="flex flex-1 flex-col items-center justify-center gap-4 py-16 text-center">
       <p className="text-6xl font-bold tracking-tight text-slate-900">404</p>
