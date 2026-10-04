@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   getFriendlyAuthErrorMessage,
-  getFriendlyPasswordResetErrorMessage,
+  passwordResetFailure,
 } from '../utils/authErrors'
 import { SIGN_IN_TITLE } from '../utils/pageTitleUi'
 
@@ -88,7 +88,15 @@ export function LoginPage() {
       await resetPassword(trimmedEmail)
       setResetSent(true)
     } catch (err) {
-      setError(getFriendlyPasswordResetErrorMessage(err))
+      // Phase 11.27 — auth/user-not-found resolves to the success state, so an
+      // unregistered address is indistinguishable from a registered one and
+      // this form cannot be used to probe for existing accounts.
+      const result = passwordResetFailure(err)
+      if (result.sent) {
+        setResetSent(true)
+      } else {
+        setError(result.message)
+      }
     } finally {
       setIsSubmitting(false)
     }

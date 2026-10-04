@@ -4,11 +4,13 @@
  * initialization, network, or emulator (FirebaseError is just a class).
  */
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { FirebaseError } from 'firebase/app'
 
 import {
   getFriendlyAuthErrorMessage,
   getFriendlyPasswordResetErrorMessage,
+  passwordResetFailure,
 } from '../../src/utils/authErrors'
 import { friendlyTimerError } from '../../src/services/timerErrors'
 import { RoomError } from '../../src/types/room'
@@ -142,5 +144,83 @@ describe('friendlyTimerError', () => {
       'Something went wrong with the timer. Please try again.',
     )
     expect(friendlyTimerError(null)).toBe('Something went wrong with the timer. Please try again.')
+  })
+})
+
+describe('passwordResetFailure (Phase 11.27 — account-enumeration mask)', () => {
+  it('reports auth/user-not-found as the success state, never as an error', () => {
+    expect(passwordResetFailure(new FirebaseError('auth/user-not-found', 'There is no user record.'))).toEqual({
+      sent: true,
+    })
+  })
+
+  it('preserves the exact friendly behavior for every other reset failure', () => {
+    expect(passwordResetFailure(fbError('auth/invalid-email'))).toEqual({
+      sent: false,
+      message: 'Please enter a valid email address.',
+    })
+    expect(passwordResetFailure(fbError('auth/too-many-requests'))).toEqual({
+      sent: false,
+      message: 'Too many requests. Please try again later.',
+    })
+    expect(passwordResetFailure(fbError('auth/network-request-failed'))).toEqual({
+      sent: false,
+      message: 'Network error. Please check your internet connection.',
+    })
+    expect(passwordResetFailure(fbError('auth/internal-error'))).toEqual({
+      sent: false,
+      message: 'Something went wrong. Please try again.',
+    })
+    expect(passwordResetFailure(new Error('raw SDK detail'))).toEqual({
+      sent: false,
+      message: 'Something went wrong. Please try again.',
+    })
+    expect(passwordResetFailure(null)).toEqual({
+      sent: false,
+      message: 'Something went wrong. Please try again.',
+    })
+  })
+
+  it('never exposes raw Firebase error text for any rejection, masked or not', () => {
+    for (const err of [fbError('auth/user-not-found'), fbError('auth/internal-error'), new Error('raw SDK detail'), null]) {
+      const rendered = JSON.stringify(passwordResetFailure(err))
+      expect(rendered).not.toContain('sdk message')
+      expect(rendered).not.toContain('raw SDK detail')
+    }
+  })
+
+  it('does not change login/register error mapping', () => {
+    expect(getFriendlyAuthErrorMessage(fbError('auth/user-not-found'))).toBe('Invalid email or password.')
+    expect(getFriendlyAuthErrorMessage(fbError('auth/invalid-credential'))).toBe('Invalid email or password.')
+    expect(getFriendlyAuthErrorMessage(fbError('auth/email-already-in-use'))).toBe(
+      'An account with this email already exists.',
+    )
+    expect(getFriendlyPasswordResetErrorMessage(fbError('auth/user-not-found'))).toBe(
+      'Something went wrong. Please try again.',
+    )
+  })
+})
+
+describe('LoginPage reset wiring (source contract, Phase 11.27)', () => {
+  const loginPageSource = readFileSync(new URL('../../src/pages/LoginPage.tsx', import.meta.url), 'utf8')
+
+  it('routes reset rejections through passwordResetFailure instead of the raw error mapper', () => {
+    expect(loginPageSource).toContain('passwordResetFailure(err)')
+    expect(loginPageSource).not.toContain('getFriendlyPasswordResetErrorMessage')
+  })
+
+  it('has exactly two paths into the success state: a resolved request and a masked rejection', () => {
+    const successAssignments = loginPageSource.match(/setResetSent\(true\)/g) ?? []
+    expect(successAssignments).toHaveLength(2)
+    expect(loginPageSource).toContain('setError(result.message)')
+  })
+
+  it('keeps the email shape gate on both the login and reset submissions', () => {
+    const shapeGates = loginPageSource.match(/isValidEmailFormat\(trimmedEmail\)/g) ?? []
+    expect(shapeGates).toHaveLength(2)
+  })
+
+  it('never assigns a raw error object to the UI', () => {
+    expect(loginPageSource).not.toMatch(/setError\(\s*(err|error|e)\s*\)/)
   })
 })

@@ -39,6 +39,7 @@ import {
   listRoomCodes,
   resetIntegrationState,
 } from './helpers'
+import { getFriendlyAuthErrorMessage, passwordResetFailure } from '../../src/utils/authErrors'
 
 /** Run-unique address: warm-emulator-safe (Auth accounts outlive a vitest run). */
 function uniqueEmail(tag: string): string {
@@ -141,5 +142,81 @@ describe('password reset through the Firebase Auth emulator', () => {
     expect(back.user.email).toBe(email)
     await signOut(auth)
     expect(auth.currentUser).toBeNull()
+  })
+})
+
+describe('account-enumeration mask (Phase 11.27)', () => {
+  /**
+   * The exact state LoginPage renders for a reset outcome: `sent` is the
+   * success banner, otherwise the error banner with the mapped message.
+   * A request that RESOLVES takes the success branch directly, which is why a
+   * known account is modelled as { sent: true } with no rejection involved.
+   */
+  function uiState(result: { sent: true } | { sent: false; message: string }): {
+    resetSent: boolean
+    error: string | null
+  } {
+    return result.sent ? { resetSent: true, error: null } : { resetSent: false, error: result.message }
+  }
+
+  it('registered address: the reset request reaches Firebase and resolves to the success state', async () => {
+    const email = uniqueEmail('known')
+    await createUserWithEmailAndPassword(auth, email, 'TestPassword123!')
+    await signOut(auth)
+
+    // Resolved => the success branch: no rejection ever reaches the mapper.
+    await sendPasswordResetEmail(auth, email)
+
+    expect(uiState({ sent: true })).toEqual({ resetSent: true, error: null })
+  })
+
+  it('unregistered address: auth/user-not-found is treated as the identical success state', async () => {
+    const rejection = await sendPasswordResetEmail(auth, `missing-${Date.now()}@example.test`).catch(
+      (e: unknown) => e,
+    )
+
+    // The emulator really answered with the account-existence code.
+    expect((rejection as { code?: string }).code).toBe('auth/user-not-found')
+
+    const result = passwordResetFailure(rejection)
+    expect(result).toEqual({ sent: true })
+    expect(uiState(result)).toEqual({ resetSent: true, error: null })
+  })
+
+  it('SECURITY: known and unknown accounts produce byte-identical user-facing results', async () => {
+    const email = uniqueEmail('sec')
+    await createUserWithEmailAndPassword(auth, email, 'TestPassword123!')
+    await signOut(auth)
+
+    await sendPasswordResetEmail(auth, email) // known account → resolves → success branch
+    const knownState = uiState({ sent: true })
+
+    const rejection = await sendPasswordResetEmail(auth, `missing-${Date.now()}@example.test`).catch(
+      (e: unknown) => e,
+    ) // unknown account → auth/user-not-found → masked branch
+    const unknownState = uiState(passwordResetFailure(rejection))
+
+    expect(unknownState).toEqual(knownState)
+    expect(JSON.stringify(unknownState)).toBe(JSON.stringify(knownState))
+
+    // Neither rendering may carry any text that reveals account existence.
+    for (const state of [knownState, unknownState]) {
+      const rendered = JSON.stringify(state)
+      expect(rendered).not.toMatch(/no user record|user-not-found|not found|does not exist/i)
+    }
+  })
+
+  it('login error behavior is unchanged by the reset mask', async () => {
+    const email = uniqueEmail('login-unchanged')
+    await createUserWithEmailAndPassword(auth, email, 'TestPassword123!')
+
+    const rejection = await signInWithEmailAndPassword(auth, email, 'WrongPassword123!').catch(
+      (e: unknown) => e,
+    )
+    expect((rejection as { code?: string }).code).toMatch(/^auth\/(invalid-credential|wrong-password)$/)
+
+    // Still the login mapping — the reset mask does not apply here.
+    expect(getFriendlyAuthErrorMessage(rejection)).toBe('Invalid email or password.')
+    expect(getFriendlyAuthErrorMessage(rejection)).not.toBe('Something went wrong. Please try again.')
   })
 })

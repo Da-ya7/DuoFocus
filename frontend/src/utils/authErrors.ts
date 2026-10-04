@@ -46,3 +46,26 @@ export function getFriendlyPasswordResetErrorMessage(error: unknown): string {
 
   return DEFAULT_ERROR_MESSAGE
 }
+
+/** What the password-reset form shows after a sendPasswordResetEmail() rejection. */
+export type PasswordResetResult = { sent: true } | { sent: false; message: string }
+
+/**
+ * Phase 11.27 — account-enumeration mask for the password-reset form.
+ *
+ * An unregistered address rejects with auth/user-not-found, which used to put
+ * the form in its error state while a registered address reached the success
+ * state — letting anyone probe for accounts. That single code is reported as
+ * a successful request so both addresses show the identical outcome.
+ *
+ * Every other rejection keeps its existing friendly behavior: the mapped
+ * message for known codes, the generic default for anything else. Raw SDK
+ * text is never returned.
+ */
+export function passwordResetFailure(error: unknown): PasswordResetResult {
+  if (error instanceof FirebaseError && error.code === 'auth/user-not-found') {
+    return { sent: true }
+  }
+
+  return { sent: false, message: getFriendlyPasswordResetErrorMessage(error) }
+}
