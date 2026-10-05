@@ -193,6 +193,7 @@ Everything below lives in the Firebase Console and **cannot be verified from thi
 | `npm run dev`     | Start dev server at `localhost:5173`     |
 | `npm run build`   | Type-check + production build to `dist/` |
 | `npm run preview` | Preview the production build locally     |
+| `npm run emulators` | Start local Firebase emulators (Auth + Firestore) pinned to the dummy `duofocus-test` project |
 | `npm run regression` | One-command verification: starts the Firebase **emulators**, runs all Vitest suites (rules + unit + integration + multi-user), test typecheck, and the production build; non-zero exit on any failure; emulators always shut down afterward |
 
 ## 🗺 Roadmap
@@ -231,6 +232,21 @@ netstat -ano | findstr :9099
 
 # macOS / Linux
 lsof -i :9099
+```
+
+</details>
+
+<details>
+<summary><b>Tests abort: "Auth emulator is bound to project duofocus-cb9fb"</b></summary>
+
+An emulator started without an explicit `--project` silently binds to the `.firebaserc`
+default — the production project. Every vitest run therefore runs a fail-fast preflight
+that refuses to execute tests against anything but the dummy `duofocus-test` project.
+Stop the misbound emulator (see the ports section above) and start the pinned command:
+
+```bash
+cd frontend
+npm run emulators   # firebase emulators:start --project duofocus-test
 ```
 
 </details>

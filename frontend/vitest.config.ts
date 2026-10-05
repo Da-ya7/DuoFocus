@@ -9,8 +9,14 @@ import { defineConfig } from 'vitest/config'
 // (firebase emulators:exec), or manually via `npm run emulators`. This
 // config is separate from vite.config.ts so the production build config
 // stays untouched.
+//
+// Phase 11.36 — globalSetup fail-fast preflight: before any suite runs, the
+// RUNNING Auth emulator must prove it is bound to the dummy duofocus-test
+// project (emulator-minted token aud), never the .firebaserc default
+// (production duofocus-cb9fb) — see tests/globalSetup.ts.
 export default defineConfig({
   test: {
+    globalSetup: './tests/globalSetup.ts',
     environment: 'node',
     include: [
       'tests/rules/**/*.test.ts',
