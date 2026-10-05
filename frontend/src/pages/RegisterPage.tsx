@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { registrationFailure } from '../utils/authErrors'
 import { REGISTER_TITLE } from '../utils/pageTitleUi'
+import { isValidEmailFormat } from '../utils/validation'
 
 export function RegisterPage() {
   const [email, setEmail] = useState('')
@@ -41,6 +42,11 @@ export function RegisterPage() {
 
     if (password !== confirmPassword) {
       setError('Passwords do not match.')
+      return
+    }
+
+    if (!isValidEmailFormat(trimmedEmail)) {
+      setError('Please enter a valid email address.')
       return
     }
 

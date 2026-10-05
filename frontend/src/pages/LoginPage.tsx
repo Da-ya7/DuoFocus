@@ -6,17 +6,7 @@ import {
   passwordResetFailure,
 } from '../utils/authErrors'
 import { SIGN_IN_TITLE } from '../utils/pageTitleUi'
-
-/**
- * Minimal shape gate shared by the login and password-reset forms (Phase
- * 11.20): an email must be non-empty and look like local@domain.tld. Firebase
- * remains the authority on deliverability — the reset flow maps its
- * auth/invalid-email rejection through the friendly error utility.
- */
-function isValidEmailFormat(value: string): boolean {
-  const [local, domain, ...extra] = value.split('@')
-  return local.length > 0 && !!domain && extra.length === 0 && domain.includes('.')
-}
+import { isValidEmailFormat } from '../utils/validation'
 
 export function LoginPage() {
   const [email, setEmail] = useState('')
