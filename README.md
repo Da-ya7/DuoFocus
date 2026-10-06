@@ -138,6 +138,18 @@ firebase deploy --only firestore:rules
 
 The rules enforce: member-only room reads, join only into a one-member room by adding your own UID, leave only by removing your own UID, immutable `ownerId`/`roomCode`/`createdAt`, a hard two-member cap, and room↔roomCode documents that can only be created or deleted together (no orphaned codes).
 
+### Deploy Frontend Hosting
+
+The production frontend is a static Vite SPA built into [`frontend/dist/`](frontend/dist/). Firebase Hosting is the deployment target. From the repo root:
+
+```bash
+firebase deploy --only hosting
+```
+
+The hosting configuration in [`firebase.json`](firebase.json) serves `frontend/dist/`, rewrites every unknown path back to `index.html` so BrowserRouter routes like `/login`, `/register`, and `/app/room/:roomId` work on direct navigation and refresh, and ignores build logs and editor/OS junk. The deploy target is the production Firebase project pinned in [`.firebaserc`](.firebaserc).
+
+The production hosting URL is **not** recorded in this repository as configuration, but the Firebase Hosting site already exists on the production project and is resolved by the CLI through `.firebaserc`. Confirm the live URL after deploy.
+
 ### Firestore Indexes
 
 Activity statistics read completion evidence across all rooms with a collection-group query filtered on `activityId`, which requires the collection-group index declared in [`firestore.indexes.json`](firestore.indexes.json). The index is configured in the repository but **has not yet been deployed to production** — deploying it (`firebase deploy --only firestore:indexes`, after `firebase login`) remains a pending, explicitly approved deployment step. Activity statistics queries work against the emulator, which does not enforce production index requirements; they will fail against production Firestore until the index is deployed.
