@@ -6,12 +6,17 @@ import { subscribeUserSessions } from '../services/sessions'
 import { subscribeToUserActivitySummaries } from '../services/activities'
 import { calculateProfileStatistics } from '../utils/profileStats'
 import { PROFILE_TITLE } from '../utils/pageTitleUi'
-import { activityDetailPath, activityNamesById } from '../utils/activityContextUi'
+import {
+  activityDetailPath,
+  activityNamesById,
+  type SessionActivityLookup,
+} from '../utils/activityContextUi'
 import {
   PROFILE_EMPTY_STATES,
   PROFILE_SECTION_META,
   profileActivityItems,
   resolveProfileActivitiesView,
+  resolveProfileHistoryView,
   resolveProfileOverviewView,
 } from '../utils/profileUi'
 import {
@@ -22,6 +27,7 @@ import {
 } from '../utils/dataRetryUi'
 import { TOUCH_TARGET_CLASSES } from '../utils/touchTargetUi'
 import { StatsSummary } from '../components/stats/StatsSummary'
+import { SessionHistory } from '../components/stats/SessionHistory'
 import { ActivityList } from '../components/activity/ActivityList'
 import type { ActivitySummary } from '../types/activity'
 import type { StudySession } from '../types/session'
@@ -49,8 +55,13 @@ import type { StudySession } from '../types/session'
  * hides the other's already-loaded data. Exactly one listener is created per
  * source (two total) and each effect returns its unsubscribe.
  *
- * Deliberately out of scope: recent-study history (Phase 12.5) and the
- * navigation link to this page (Phase 12.6).
+ * Phase 12.5 adds the recent-study section from the SAME session state: the
+ * shared SessionHistory component renders the list read-only (no delete flow is
+ * passed — deletion stays a Home feature), newest first by the subscription's
+ * own completedAt-descending order, with activity labels resolved through the
+ * same UX-014 lookup Home uses. No third subscription, query, or sort exists.
+ *
+ * Deliberately out of scope: the navigation link to this page (Phase 12.6).
  */
 
 /** Friendly, retryable copy — never a raw Firebase message (Home's convention). */
@@ -227,6 +238,31 @@ export function ProfilePage() {
     [profile.activities, activitiesView.namesPending],
   )
 
+  // ---- Phase 12.5 — recent study: same sessions source, shared list ----
+  // The view is decided by the SESSIONS source only: rows are never hidden
+  // because the activity-name source is pending or failed (each row's label is
+  // resolved independently inside SessionHistory).
+  const historyView = useMemo(
+    () =>
+      resolveProfileHistoryView({
+        sessionsLoading,
+        sessionsError: sessionsError !== null,
+        sessionCount: sessions.length,
+      }),
+    [sessionsLoading, sessionsError, sessions.length],
+  )
+
+  // UX-014 lookup handed to SessionHistory — the same construction Home uses:
+  // current names from the member list this page already loads, plus the source
+  // status so a row can show a provisional label while names are in flight.
+  const sessionActivityLookup = useMemo<SessionActivityLookup>(
+    () => ({
+      status: activitiesLoading ? 'loading' : activitiesError ? 'error' : 'ready',
+      names: activityNames,
+    }),
+    [activitiesLoading, activitiesError, activityNames],
+  )
+
   // Retry: the guard closes the window between the click and the re-render that
   // replaces the error panel with the loading panel (Home's UX-007 pattern), so
   // a double click can never start two subscriptions.
@@ -341,6 +377,51 @@ export function ProfilePage() {
                 {catchUpRetrying ? 'Trying again…' : RETRY_LABEL}
               </button>
             </div>
+          )}
+        </section>
+
+        {/* ---- PERSONAL scope: this user's own recent sessions, newest first ---- */}
+        <section
+          className="mt-8 border-t border-slate-200 pt-6"
+          aria-labelledby="profile-history-heading"
+        >
+          <h2
+            id="profile-history-heading"
+            className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            {PROFILE_SECTION_META.history.heading}
+          </h2>
+          <p className="mb-3 text-xs text-slate-400">{PROFILE_SECTION_META.history.caption}</p>
+
+          {historyView.state === 'loading' ? (
+            <p role="status" className={PANEL_CLASSES}>
+              Loading your recent sessions…
+            </p>
+          ) : historyView.state === 'error' ? (
+            // Same friendly message and SAME retry source as the overview above
+            // (one failure, one guard, one resubscribe — never two listeners).
+            <div className={ERROR_PANEL_CLASSES}>
+              <p role="alert" className={ERROR_TEXT_CLASSES}>
+                {sessionsError}
+              </p>
+              <button
+                type="button"
+                onClick={handleRetrySessions}
+                disabled={sessionsLoading}
+                className={ERROR_RETRY_BUTTON_CLASSES}
+              >
+                {RETRY_LABEL}
+              </button>
+            </div>
+          ) : (
+            // Reused shared list, READ-ONLY: no delete props are passed, so the
+            // destructive flow stays a Home feature. Newest first is the
+            // subscription's own completedAt-descending order — no second sort.
+            <SessionHistory
+              sessions={sessions}
+              activityLookup={sessionActivityLookup}
+              emptyState={PROFILE_EMPTY_STATES.history}
+            />
           )}
         </section>
 

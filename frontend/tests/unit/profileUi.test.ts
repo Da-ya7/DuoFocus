@@ -17,6 +17,7 @@ import {
   PROFILE_UNAVAILABLE_ROW_ID,
   profileActivityItems,
   resolveProfileActivitiesView,
+  resolveProfileHistoryView,
   resolveProfileOverviewView,
 } from '../../src/utils/profileUi'
 import { calculateProfileStatistics } from '../../src/utils/profileStats'
@@ -45,15 +46,23 @@ function session(params: {
   }
 }
 
-describe('12.4 Profile section identity', () => {
-  it('names both sections with non-empty headings and captions', () => {
-    expect(PROFILE_SECTIONS).toEqual(['overview', 'activities'])
+describe('12.4+12.5 Profile section identity', () => {
+  it('names all three sections with non-empty headings and captions, in reading order', () => {
+    // 12.5 inserts history BETWEEN the two existing sections: both personal
+    // sections read before the shared-name activities block.
+    expect(PROFILE_SECTIONS).toEqual(['overview', 'history', 'activities'])
     for (const id of PROFILE_SECTIONS) {
       const meta = PROFILE_SECTION_META[id]
       expect(meta.id).toBe(id)
       expect(meta.heading.trim().length).toBeGreaterThan(0)
       expect(meta.caption.trim().length).toBeGreaterThan(0)
     }
+  })
+
+  it('titles the 12.5 section exactly "Recent study sessions" and keeps it personal', () => {
+    expect(PROFILE_SECTION_META.history.heading).toBe('Recent study sessions')
+    expect(PROFILE_SECTION_META.history.caption).toMatch(/your own/i)
+    expect(PROFILE_SECTION_META.history.caption).toMatch(/newest first/i)
   })
 
   it('states that the overview figures are the user\'s OWN (personal, not shared)', () => {
@@ -67,8 +76,8 @@ describe('12.4 Profile section identity', () => {
   })
 })
 
-describe('12.4 Profile empty states (empty is not an error)', () => {
-  it('gives both sections a message and a hint', () => {
+describe('12.4+12.5 Profile empty states (empty is not an error)', () => {
+  it('gives every section a message and a hint', () => {
     for (const id of PROFILE_SECTIONS) {
       const state = PROFILE_EMPTY_STATES[id]
       expect(state.message.trim().length).toBeGreaterThan(0)
@@ -86,6 +95,15 @@ describe('12.4 Profile empty states (empty is not an error)', () => {
   it('says "totals" for activities (no personal rows ≠ no activities)', () => {
     expect(PROFILE_EMPTY_STATES.activities.message).toMatch(/totals/i)
     expect(PROFILE_EMPTY_STATES.activities.message).not.toMatch(/^no activities/i)
+  })
+
+  it('gives history empty copy distinct from the overview\'s note (12.5)', () => {
+    // Same empty record, different question: the overview says the RECORD is
+    // empty; history says the LIST is empty — and neither reads as a failure
+    // (covered by the loop above).
+    expect(PROFILE_EMPTY_STATES.history.message).not.toBe(PROFILE_EMPTY_STATES.overview.message)
+    expect(PROFILE_EMPTY_STATES.history.message).toMatch(/recent sessions/i)
+    expect(PROFILE_EMPTY_STATES.history.hint).toMatch(/newest first/i)
   })
 })
 
@@ -135,6 +153,39 @@ describe('12.4 overview state (sessions source only)', () => {
         totalSessions: 3,
       }),
     ).toEqual({ state: 'ready', showEmptyHint: false })
+  })
+})
+
+describe('12.5 recent-study state (sessions source only)', () => {
+  it('is loading — and lists nothing — while the first session snapshot is in flight', () => {
+    expect(
+      resolveProfileHistoryView({ sessionsLoading: true, sessionsError: false, sessionCount: 0 }),
+    ).toEqual({ state: 'loading' })
+    // Loading wins even when sessions from a previous render are in state: a
+    // switch to another account must never show the old list mid-flight.
+    expect(
+      resolveProfileHistoryView({ sessionsLoading: true, sessionsError: false, sessionCount: 5 }),
+    ).toEqual({ state: 'loading' })
+  })
+
+  it('is error on failure (a retryable message, never a stale or blank list)', () => {
+    expect(
+      resolveProfileHistoryView({ sessionsLoading: false, sessionsError: true, sessionCount: 0 }),
+    ).toEqual({ state: 'error' })
+  })
+
+  it('shows the rows whenever the loaded record has any session', () => {
+    // Name-source state is deliberately NOT an input: a pending or failed
+    // activity list can only change a row's label, never hide a session.
+    expect(
+      resolveProfileHistoryView({ sessionsLoading: false, sessionsError: false, sessionCount: 1 }),
+    ).toEqual({ state: 'rows' })
+  })
+
+  it('is the friendly empty state only when a loaded record is genuinely empty', () => {
+    expect(
+      resolveProfileHistoryView({ sessionsLoading: false, sessionsError: false, sessionCount: 0 }),
+    ).toEqual({ state: 'empty' })
   })
 })
 

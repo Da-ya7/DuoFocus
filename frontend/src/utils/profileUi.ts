@@ -27,7 +27,7 @@ import type { HomeEmptyState } from './homeUi'
 // ---------------------------------------------------------------------------
 
 /** The Profile sections in their fixed reading order. */
-export const PROFILE_SECTIONS = ['overview', 'activities'] as const
+export const PROFILE_SECTIONS = ['overview', 'history', 'activities'] as const
 
 export type ProfileSectionId = (typeof PROFILE_SECTIONS)[number]
 
@@ -53,6 +53,11 @@ export const PROFILE_SECTION_META: Record<ProfileSectionId, ProfileSectionMeta> 
     heading: 'Personal statistics',
     caption: 'Your own completed sessions — never the shared total of an activity.',
   },
+  history: {
+    id: 'history',
+    heading: 'Recent study sessions',
+    caption: 'Your own completed sessions, newest first — the records the totals above are built from.',
+  },
   activities: {
     id: 'activities',
     heading: 'Your activities',
@@ -60,6 +65,11 @@ export const PROFILE_SECTION_META: Record<ProfileSectionId, ProfileSectionMeta> 
       'Your own time and sessions per activity. The shared total for an activity is on its page.',
   },
 }
+
+// (12.5) history sits between the two: it is PERSONAL scope, exactly like the
+// overview above it, so both personal sections read before the shared-name
+// activities block — the same reading order Home uses (its personal stats and
+// study history come before its activity list).
 
 // ---------------------------------------------------------------------------
 // Empty states (what is empty → why it matters → what to do next)
@@ -83,6 +93,12 @@ export const PROFILE_EMPTY_STATES: Record<ProfileSectionId, HomeEmptyState> = {
   activities: {
     message: 'No personal activity totals yet.',
     hint: 'Complete a focus timer in a room and your time appears here, grouped by activity.',
+  },
+  history: {
+    // Distinct from the overview's note (the same empty record, a different
+    // question asked of it) and never phrased as a failure.
+    message: 'No recent sessions to show.',
+    hint: 'Sessions you complete in a room appear here, newest first.',
   },
 }
 
@@ -169,6 +185,46 @@ export function resolveProfileActivitiesView(input: {
     namesPending: input.activitiesLoading,
     nameSourceError: input.activitiesError,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Recent study sessions (Phase 12.5 — personal history, newest first)
+// ---------------------------------------------------------------------------
+
+export type ProfileHistoryState = 'loading' | 'error' | 'rows' | 'empty'
+
+export interface ProfileHistoryView {
+  state: ProfileHistoryState
+}
+
+/**
+ * What the recent-study section shows.
+ *
+ * Driven ONLY by the sessions source — the same source the overview uses — so
+ * its states mirror the overview's precedence: the first snapshot is loading
+ * (never a blank list), a failed load shows its own retryable message, and a
+ * loaded record that happens to be empty gets the friendly empty state, which
+ * is distinct from both. The activity-name source plays NO part: a pending or
+ * failed name load changes only each row's LABEL (the reused SessionHistory
+ * resolves that per row), never whether a completed session is listed.
+ *
+ * Rows are newest-first by construction: subscribeUserSessions orders the
+ * query by completedAt descending (the same sorted array Home already hands to
+ * SessionHistory), so the page renders the list as delivered and no second
+ * sort exists to drift from the query.
+ */
+export function resolveProfileHistoryView(input: {
+  sessionsLoading: boolean
+  sessionsError: boolean
+  sessionCount: number
+}): ProfileHistoryView {
+  if (input.sessionsLoading) {
+    return { state: 'loading' }
+  }
+  if (input.sessionsError) {
+    return { state: 'error' }
+  }
+  return { state: input.sessionCount > 0 ? 'rows' : 'empty' }
 }
 
 // ---------------------------------------------------------------------------

@@ -18,8 +18,11 @@
  *   4  the data-wiring contract (existing services only, no direct Firestore,
  *      no N+1, no duplicated statistics/catch-up, one listener per source)
  *   5  the Phase 12.4 UI contract (reused components, PERSONAL rows, the
- *      existing route helper, scope: no history, no navigation link)
- *   6  loading/error/identity/accessibility/responsive conventions
+ *      existing route helper)
+ *   6  the Phase 12.5 history contract (reused SessionHistory, no second
+ *      subscription, no duplicated sort/mapping, read-only rows)
+ *   7  loading/error/identity/accessibility/responsive conventions, and the
+ *      remaining scope: no navigation link (12.6), no deletion/editing
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -345,9 +348,12 @@ describe('12.4 ProfilePage source contract — statistics & activity UI', () => 
   })
 
   it('navigates through the existing route helper, never a hand-built path', () => {
-    expect(profilePageSource).toContain(
-      "import { activityDetailPath, activityNamesById } from '../utils/activityContextUi'",
+    // The import grew a type-only member in 12.5 (SessionActivityLookup) but
+    // still comes from the same shared module.
+    expect(profilePageSource).toMatch(
+      /import \{\s*activityDetailPath,\s*activityNamesById,/,
     )
+    expect(profilePageSource).toContain("} from '../utils/activityContextUi'")
     expect(profilePageSource).toContain('navigate(activityDetailPath(activityId))')
     expect(profilePageSource).not.toMatch(/\/app\/activity\//)
     expect(profilePageSource).toMatch(/if \(activityId\.length === 0\) return/)
@@ -371,23 +377,91 @@ describe('12.4 ProfilePage source contract — statistics & activity UI', () => 
     expect(statsSummarySource).toContain('formatFocusTime')
   })
 
-  it('stays in scope: no recent-study history (12.5) and no navigation link (12.6)', () => {
-    expect(profilePageSource).not.toContain('SessionHistory')
-    expect(profilePageSource).not.toContain('recentDays')
+  it('stays in scope: no navigation link (12.6) and no profile features beyond this phase', () => {
     expect(profilePageSource).not.toMatch(/<Link|<NavLink|to="\/app\/profile"/)
     expect(profilePageSource).not.toMatch(/avatar|bio|displayName|photoURL/i)
-    expect(profilePageSource).not.toContain('deleteUserSession')
     expect(profilePageSource).not.toContain('renameActivity')
     expect(profilePageSource).not.toContain('<svg')
     expect(profilePageSource).not.toContain('canvas')
   })
 })
 
+describe('12.5 ProfilePage source contract — recent study history', () => {
+  it('reuses the SHARED SessionHistory component with the page\'s own sessions', () => {
+    expect(profilePageSource).toContain(
+      "import { SessionHistory } from '../components/stats/SessionHistory'",
+    )
+    expect(profilePageSource).toContain('sessions={sessions}')
+    expect(profilePageSource).toContain('activityLookup={sessionActivityLookup}')
+    expect(profilePageSource).toContain('emptyState={PROFILE_EMPTY_STATES.history}')
+  })
+
+  it('renders history READ-ONLY: no deletion flow is passed to the component', () => {
+    expect(profilePageSource).not.toMatch(
+      /onRequestDelete|onConfirmDelete|onCancelDelete|confirmingSessionId|deletingSessionId/,
+    )
+    expect(profilePageSource).not.toContain('deleteUserSession')
+  })
+
+  it('adds NO subscription, query, or lifecycle: the existing sessions state only', () => {
+    expect(profilePageSource.match(/useEffect\(/g)).toHaveLength(3) // title + the two sources
+    expect(profilePageSource).not.toContain('getUserSessions')
+    expect(profilePageSource).not.toContain('getDocs')
+    expect(profilePageSource).not.toContain('onSnapshot')
+    expect(profilePageSource).not.toContain('setInterval')
+    expect(profilePageSource).not.toContain('setTimeout')
+  })
+
+  it('takes the list newest-first from the subscription order (no duplicated sort or mapping)', () => {
+    expect(profilePageSource).toContain('completedAt-descending')
+    expect(profilePageSource).not.toMatch(/\.sort\(/)
+    // No second derivation of history: the flat StudySession[] flows straight
+    // into the component (profileStats.recentDays is a grouped shape the list
+    // does not consume).
+    expect(profilePageSource).not.toContain('recentDays')
+    expect(profilePageSource).not.toMatch(/\/\s*60\b/)
+  })
+
+  it('builds the name lookup exactly the way Home does (same UX-014 machinery)', () => {
+    expect(profilePageSource).toMatch(
+      /status: activitiesLoading \? 'loading' : activitiesError \? 'error' : 'ready',/,
+    )
+    expect(profilePageSource).toContain('names: activityNames')
+    expect(profilePageSource).toContain('type SessionActivityLookup')
+  })
+
+  it('gates the section on the pure resolver and the SESSIONS source only', () => {
+    expect(profilePageSource).toMatch(/resolveProfileHistoryView\(\{/)
+    expect(profilePageSource).toContain('sessionCount: sessions.length,')
+    expect(profilePageSource).toContain('Loading your recent sessions…')
+    // The history error panel reuses the SAME retry source and guard as the
+    // overview — one failure, one resubscribe, never a second listener.
+    expect(profilePageSource.match(/onClick=\{handleRetrySessions\}/g)).toHaveLength(2)
+  })
+
+  it('sits between the overview and the activities section (both personal sections first)', () => {
+    const overview = profilePageSource.indexOf('profile-overview-heading')
+    const history = profilePageSource.indexOf('profile-history-heading')
+    const activities = profilePageSource.indexOf('profile-activities-heading')
+    expect(overview).toBeGreaterThanOrEqual(0)
+    expect(history).toBeGreaterThan(overview)
+    expect(activities).toBeGreaterThan(history)
+  })
+
+  it('keeps history readable in every state: labelled heading, status, alert, retry', () => {
+    expect(profilePageSource).toContain('{PROFILE_SECTION_META.history.heading}')
+    expect(profilePageSource).toContain('{PROFILE_SECTION_META.history.caption}')
+    expect(profilePageSource).toContain('aria-labelledby="profile-history-heading"')
+    expect(profilePageSource).toContain('role="status"')
+    expect(profilePageSource).toContain('RETRY_LABEL')
+  })
+})
+
 describe('12.4 ProfilePage source contract — loading, errors, accessibility', () => {
-  it('has exactly one h1 and two labelled h2 sections', () => {
+  it('has exactly one h1 and three labelled h2 sections (overview, history, activities)', () => {
     expect(profilePageSource.match(/<h1\b/g)).toHaveLength(1)
-    expect(profilePageSource.match(/<h2\b/g)).toHaveLength(2)
-    expect(profilePageSource.match(/aria-labelledby=/g)).toHaveLength(2)
+    expect(profilePageSource.match(/<h2\b/g)).toHaveLength(3)
+    expect(profilePageSource.match(/aria-labelledby=/g)).toHaveLength(3)
   })
 
   it('shows the authenticated email as text', () => {
