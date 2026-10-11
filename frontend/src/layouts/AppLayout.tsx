@@ -34,6 +34,15 @@ export function AppLayout() {
                 >
                   App
                 </Link>
+                {/* Phase 12.6: the existing Profile page becomes reachable. Same
+                    link styling as the App item, plus the app-wide focus-visible
+                    ring (11.24 convention) so keyboard users can see it. */}
+                <Link
+                  to="/app/profile"
+                  className="font-medium text-slate-700 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
+                >
+                  Profile
+                </Link>
                 <div className="flex flex-col items-end gap-1">
                   <button
                     type="button"
