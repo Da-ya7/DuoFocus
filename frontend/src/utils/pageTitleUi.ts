@@ -68,3 +68,6 @@ export function activityTitle(name: string): string {
   const trimmed = name.trim()
   return withAppTitle(trimmed || 'Activity')
 }
+
+/** Profile ('/app/profile'): the user's personal study record. */
+export const PROFILE_TITLE = withAppTitle('Study Profile')

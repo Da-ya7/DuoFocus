@@ -8,6 +8,7 @@ import { ActivityDetailPage } from '../pages/ActivityDetailPage'
 import { RoomPage } from '../pages/RoomPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
 import { ProtectedRoute } from './ProtectedRoute'
+import { ProfilePage } from '../pages/ProfilePage'
 
 export function AppRoutes() {
   return (
@@ -18,6 +19,7 @@ export function AppRoutes() {
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/app" element={<ProtectedRoute />}>
           <Route index element={<AppHomePage />} />
+          <Route path="profile" element={<ProfilePage />} />
           <Route path="room/:roomId" element={<RoomPage />} />
           <Route path="activity/:activityId" element={<ActivityDetailPage />} />
         </Route>
