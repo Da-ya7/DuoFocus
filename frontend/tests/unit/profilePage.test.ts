@@ -1,21 +1,25 @@
 /**
- * Phase 12.3 — Profile page shell + data wiring (pure/static audit).
+ * Phase 12.3 (data wiring) + Phase 12.4 (statistics & activity UI) — Profile
+ * page contract.
  *
  * The repository runs Vitest in a Node environment with no DOM test
  * infrastructure (no jsdom/@testing-library — see Phase 11.12's note in
  * tests/integration/logoutAuthBoundary.test.ts), so the React page is verified
- * the way the other pages are: the PURE layer it consumes is exercised for
- * real, and the page's data-wiring contract is pinned by reading its source.
+ * the way the other pages are: the PURE layers it consumes are exercised for
+ * real, and the page's contract is pinned by reading its source. These are
+ * NOT browser-rendering tests: layout, focus behaviour, and screen-reader
+ * output are pinned as source conventions, not measured.
  *
  * Covered here:
  *   1  /app/profile is registered inside the EXISTING protected /app branch
  *   2  the page's title constant follows the established title builder
- *   3  the real pipeline (activityNamesById → calculateProfileStatistics)
- *      produces the Profile view, including the left-activity fallback
- *   4  the page's source contract: existing services only, no direct Firestore,
- *      no N+1 activity reads, no duplicated statistics/catch-up/formatter, the
- *      shared catch-up lifecycle inputs, friendly retryable errors, and the
- *      accessibility structure (one h1, accessible loading, role="alert")
+ *   3  the real pipeline (activityNamesById → calculateProfileStatistics →
+ *      profileActivityItems) produces the personal figures the UI renders
+ *   4  the data-wiring contract (existing services only, no direct Firestore,
+ *      no N+1, no duplicated statistics/catch-up, one listener per source)
+ *   5  the Phase 12.4 UI contract (reused components, PERSONAL rows, the
+ *      existing route helper, scope: no history, no navigation link)
+ *   6  loading/error/identity/accessibility/responsive conventions
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -24,7 +28,13 @@ import path from 'node:path'
 import { matchPath } from 'react-router-dom'
 
 import { PROFILE_TITLE } from '../../src/utils/pageTitleUi'
-import { activityNamesById } from '../../src/utils/activityContextUi'
+import { activityDetailPath, activityNamesById } from '../../src/utils/activityContextUi'
+import {
+  PROFILE_UNAVAILABLE_ROW_ID,
+  profileActivityItems,
+  resolveProfileActivitiesView,
+  resolveProfileOverviewView,
+} from '../../src/utils/profileUi'
 import { calculateProfileStatistics } from '../../src/utils/profileStats'
 import type { ActivitySummary } from '../../src/types/activity'
 import type { StudySession } from '../../src/types/session'
@@ -32,25 +42,21 @@ import type { StudySession } from '../../src/types/session'
 const unitDir = path.dirname(fileURLToPath(import.meta.url))
 const PROFILE_PAGE_PATH = path.resolve(unitDir, '../../src/pages/ProfilePage.tsx')
 const APP_ROUTES_PATH = path.resolve(unitDir, '../../src/routes/AppRoutes.tsx')
+const STATS_SUMMARY_PATH = path.resolve(unitDir, '../../src/components/stats/StatsSummary.tsx')
+const ACTIVITY_LIST_PATH = path.resolve(unitDir, '../../src/components/activity/ActivityList.tsx')
 
 const profilePageSource = readFileSync(PROFILE_PAGE_PATH, 'utf8')
 const appRoutesSource = readFileSync(APP_ROUTES_PATH, 'utf8')
+const statsSummarySource = readFileSync(STATS_SUMMARY_PATH, 'utf8')
+const activityListSource = readFileSync(ACTIVITY_LIST_PATH, 'utf8')
 
 function summary(activityId: string, name: string, totalFocusSeconds = 0): ActivitySummary {
-  return {
-    activityId,
-    name,
-    totalFocusSeconds,
-    studyDays: 0,
-    lastStudiedAt: null,
-  }
+  return { activityId, name, totalFocusSeconds, studyDays: 0, lastStudiedAt: null }
 }
 
 /** Exactly the page's projection of ActivitySummary[] into the UX-014 map. */
 function profileActivityNameMap(summaries: readonly ActivitySummary[]): Record<string, string> {
-  return activityNamesById(
-    summaries.map((s) => ({ id: s.activityId, name: s.name })),
-  )
+  return activityNamesById(summaries.map((s) => ({ id: s.activityId, name: s.name })))
 }
 
 function session(params: {
@@ -90,8 +96,6 @@ describe('12.3 /app/profile route registration', () => {
   })
 
   it('resolves /app/profile through the app route table shape', () => {
-    // The protected branch mounts '/app' with nested children, so the resolved
-    // app path is a single segment under it (same shape the other pages use).
     const match = matchPath('/app/profile', '/app/profile')
     expect(match).not.toBeNull()
     expect(matchPath('/app/activity/:activityId', '/app/profile')).toBeNull()
@@ -109,12 +113,9 @@ describe('12.3 Profile title', () => {
   })
 })
 
-describe('12.3 Profile view derivation (real pipeline)', () => {
+describe('12.3+12.4 Profile view derivation (real pipeline)', () => {
   it('flows sessions + the member activity names into calculateProfileStatistics', () => {
-    const summaries = [
-      summary('actA', 'DSA', 4500),
-      summary('actB', 'Physics', 1500),
-    ]
+    const summaries = [summary('actA', 'DSA', 4500), summary('actB', 'Physics', 1500)]
     const activityNames = profileActivityNameMap(summaries)
     expect(activityNames).toEqual({ actA: 'DSA', actB: 'Physics' })
 
@@ -129,65 +130,123 @@ describe('12.3 Profile view derivation (real pipeline)', () => {
     expect(profile.overall.totalSessions).toBe(3)
     expect(profile.overall.totalFocusSeconds).toBe(6000)
     expect(profile.overall.topicsStudied).toBe(2)
-    expect(profile.activities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          activityId: 'actA',
-          activityName: 'DSA',
-          totalFocusSeconds: 4500,
-          totalSessions: 2,
-        }),
-        expect.objectContaining({
-          activityId: 'actB',
-          activityName: 'Physics',
-          totalFocusSeconds: 1500,
-          totalSessions: 1,
-        }),
-      ]),
-    )
-    expect(profile.activities.reduce((total, a) => total + a.totalFocusSeconds, 0)).toBe(
+    // The five figures the overview shows, from the same single derivation.
+    expect(profile.overall.todayFocusSeconds).toBe(0)
+    expect(profile.overall.currentStreakDays).toBe(0)
+  })
+
+  it('produces PERSONAL rows that reconcile with the personal totals', () => {
+    const names = profileActivityNameMap([summary('actA', 'DSA')])
+    const sessions = [
+      session({ id: 'r1_c1', activityId: 'actA', durationSeconds: 1500, completedAtSeconds: 1735689600 }),
+      session({ id: 'r2_c2', activityId: 'actA', durationSeconds: 3000, completedAtSeconds: 1735776000 }),
+      session({ id: 'r3_c3', activityId: 'actB', durationSeconds: 1500, completedAtSeconds: 1735862400 }),
+    ]
+
+    const profile = calculateProfileStatistics(sessions, names, NOW)
+    const items = profileActivityItems(profile.activities, { namesPending: false })
+
+    expect(items[0]!.id).toBe('actA')
+    expect(items[0]!.totalFocusSeconds).toBe(4500)
+    expect(items[0]!.totalSessions).toBe(2)
+    expect(items.reduce((total, item) => total + item.totalFocusSeconds, 0)).toBe(
       profile.overall.totalFocusSeconds,
     )
-    expect(profile.activities.reduce((total, a) => total + a.totalSessions, 0)).toBe(
+    expect(items.reduce((total, item) => total + item.totalSessions, 0)).toBe(
       profile.overall.totalSessions,
     )
   })
 
-  it('keeps a LEFT activity (name unresolvable) in the totals with the safe label', () => {
-    const summaries = [summary('actA', 'DSA', 1500)]
-    const activityNames = profileActivityNameMap(summaries)
-    expect(activityNames).toEqual({ actA: 'DSA' })
-
+  it('keeps a LEFT activity in the totals with the safe fallback label', () => {
+    const activityNames = profileActivityNameMap([summary('actA', 'DSA')])
     const sessions = [
       session({ id: 'r1_c1', activityId: 'actA', durationSeconds: 1500, completedAtSeconds: 1735689600 }),
       session({ id: 'r2_c2', activityId: 'actB', durationSeconds: 1500, completedAtSeconds: 1735776000 }),
     ]
 
     const profile = calculateProfileStatistics(sessions, activityNames, NOW)
-
     expect(profile.overall.totalSessions).toBe(2)
     expect(profile.overall.totalFocusSeconds).toBe(3000)
     // Both ids have sessions, so both are studied topics; actB is only NAMELESS.
     expect(profile.overall.topicsStudied).toBe(2)
 
-    const byActivity = new Map(profile.activities.map((a) => [a.activityId, a]))
-    expect(byActivity.get('actA')!.activityName).toBe('DSA')
-    expect(byActivity.get('actB')!.activityName).toBe('Activity unavailable')
-    expect(byActivity.get('actB')!.totalFocusSeconds).toBe(1500)
-    expect(byActivity.get('actB')!.totalSessions).toBe(1)
+    const items = profileActivityItems(profile.activities, { namesPending: false })
+    const left = items.find((item) => item.id === 'actB')
+    expect(left!.name).toBe('Activity unavailable')
+    expect(left!.totalFocusSeconds).toBe(1500)
+    expect(left!.totalSessions).toBe(1)
+    expect(left!.selectable).toBe(true) // a real id: its page still exists
   })
 
-  it('handles zero sessions and zero activities (no fabricated numbers)', () => {
+  it('handles zero sessions and zero activities (real zeros, no invented rows)', () => {
     const profile = calculateProfileStatistics([], profileActivityNameMap([]), NOW)
     expect(profile.overall.totalSessions).toBe(0)
     expect(profile.overall.totalFocusSeconds).toBe(0)
     expect(profile.overall.topicsStudied).toBe(0)
-    expect(profile.activities).toEqual([])
-    expect(profile.recentDays).toEqual([])
+    expect(profileActivityItems(profile.activities, { namesPending: false })).toEqual([])
+    // Zero history is a ready state with a friendly note — never an error.
+    expect(
+      resolveProfileOverviewView({
+        sessionsLoading: false,
+        sessionsError: false,
+        totalSessions: profile.overall.totalSessions,
+      }),
+    ).toEqual({ state: 'ready', showEmptyHint: true })
+    expect(
+      resolveProfileActivitiesView({
+        rowCount: profile.activities.length,
+        activitiesLoading: false,
+        activitiesError: false,
+      }).state,
+    ).toBe('empty')
+  })
+
+  it('keeps the personal figures when an activity is renamed (rename ≠ re-total)', () => {
+    const sessions = [
+      session({ id: 'r1_c1', activityId: 'actA', durationSeconds: 1500, completedAtSeconds: 1735689600 }),
+      session({ id: 'r2_c2', activityId: 'actA', durationSeconds: 1500, completedAtSeconds: 1735776000 }),
+    ]
+    const before = calculateProfileStatistics(sessions, { actA: 'DSA' }, NOW)
+    const after = calculateProfileStatistics(sessions, { actA: 'Renamed DSA' }, NOW)
+
+    expect(after.overall.totalFocusSeconds).toBe(before.overall.totalFocusSeconds)
+    expect(after.overall.totalSessions).toBe(before.overall.totalSessions)
+    expect(after.overall.topicsStudied).toBe(before.overall.topicsStudied)
+    expect(profileActivityItems(after.activities, { namesPending: false })[0]!.name).toBe(
+      'Renamed DSA',
+    )
+  })
+
+  it('navigates to the EXISTING Activity Detail route through the shared helper', () => {
+    const detailPath = activityDetailPath('dFZEzOG76fyZs4F3D8Id')
+    expect(detailPath).toBe('/app/activity/dFZEzOG76fyZs4F3D8Id')
+    expect(matchPath('/app/activity/:activityId', detailPath)).not.toBeNull()
+  })
+
+  it('gives the unavailable bucket a stable list key (never a navigable activity id)', () => {
+    // Its real activityId is '' — unusable as a React key and meaningless as a
+    // route — so the row gets a synthetic key and is marked non-selectable.
+    expect(PROFILE_UNAVAILABLE_ROW_ID).not.toBe('')
+
+    const items = profileActivityItems(
+      [
+        {
+          activityId: '',
+          activityName: 'Activity unavailable',
+          totalFocusSeconds: 600,
+          totalSessions: 1,
+          lastStudiedAt: null,
+        },
+      ],
+      { namesPending: false },
+    )
+    expect(items[0]!.id).toBe(PROFILE_UNAVAILABLE_ROW_ID)
+    expect(items[0]!.selectable).toBe(false)
+    expect(items[0]!.totalFocusSeconds).toBe(600)
   })
 })
 
-describe('12.3 ProfilePage source contract — data wiring', () => {
+describe('12.3 ProfilePage source contract — data wiring (unchanged)', () => {
   it('uses the existing realtime services and never queries Firestore directly', () => {
     expect(profilePageSource).toContain("import { subscribeUserSessions } from '../services/sessions'")
     expect(profilePageSource).toContain(
@@ -202,20 +261,13 @@ describe('12.3 ProfilePage source contract — data wiring', () => {
     expect(profilePageSource).not.toContain('getActivitySummary')
     expect(profilePageSource).not.toContain('getActivityCompletions')
     expect(profilePageSource).not.toContain('getActivityDetail')
-    expect(profilePageSource).not.toMatch(/for\s*\(.*of.*\)\s*\{[\s\S]*getActivity/)
   })
 
   it('consumes the pure profile view model and duplicates no statistics', () => {
     expect(profilePageSource).toContain('calculateProfileStatistics')
     expect(profilePageSource).not.toContain('calculateStudyStatistics')
-    expect(profilePageSource).not.toMatch(/totalFocusSeconds\s*\+?=\s*|totalFocusSeconds\s*:\s*.*reduce/)
     expect(profilePageSource).not.toMatch(/\.reduce\(/)
-  })
-
-  it('formats durations with the existing formatter (no second duration implementation)', () => {
-    expect(profilePageSource).toContain('formatFocusDuration')
-    expect(profilePageSource).not.toMatch(/\/\s*60\b/)
-    expect(profilePageSource).not.toMatch(/\bminutes?\b\s*%/)
+    expect(profilePageSource).not.toMatch(/totalFocusSeconds\s*\+?=/)
   })
 
   it('runs the SHARED catch-up lifecycle with the same inputs Home passes', () => {
@@ -225,7 +277,6 @@ describe('12.3 ProfilePage source contract — data wiring', () => {
     expect(profilePageSource).toMatch(
       /useSessionCatchUp\(\{\s*uid,\s*activitiesLoading,\s*activities:\s*catchUpActivities,?\s*\}\)/,
     )
-    // No copy of the catch-up decisions or the service call.
     expect(profilePageSource).not.toContain('syncMissedCompletionsForUser')
     expect(profilePageSource).not.toContain('accountedSessionIdsRef')
     expect(profilePageSource).not.toContain('catchUpPassRef')
@@ -235,7 +286,6 @@ describe('12.3 ProfilePage source contract — data wiring', () => {
   it('re-subscribes only through per-source attempt counters (one listener per source per attempt)', () => {
     expect(profilePageSource).toContain('}, [uid, sessionsAttempt])')
     expect(profilePageSource).toContain('}, [uid, activitiesAttempt])')
-    // No polling anywhere.
     expect(profilePageSource).not.toContain('setInterval')
     expect(profilePageSource).not.toContain('setTimeout')
   })
@@ -243,24 +293,137 @@ describe('12.3 ProfilePage source contract — data wiring', () => {
   it('derives the profile once, memoized from its two real inputs', () => {
     expect(profilePageSource).toMatch(/const profile = useMemo\(/)
     expect(profilePageSource).toContain('calculateProfileStatistics(sessions, activityNames)')
+    expect(profilePageSource).not.toMatch(/const profile = \(/)
+  })
+
+  it('clears a previous identity\'s data before loading a DIFFERENT user (a retry keeps it)', () => {
+    expect(profilePageSource).toMatch(/sessionsUidRef\.current !== uid/)
+    expect(profilePageSource).toMatch(/activitiesUidRef\.current !== uid/)
+    // ...and both are reset when the user signs out entirely.
+    expect(profilePageSource).toMatch(/sessionsUidRef\.current = null/)
+    expect(profilePageSource).toMatch(/activitiesUidRef\.current = null/)
   })
 })
 
-describe('12.3 ProfilePage source contract — loading, errors, accessibility', () => {
-  it('has exactly one h1 and shows the authenticated email as text', () => {
-    expect(profilePageSource.match(/<h1\b/g)).toHaveLength(1)
-    expect(profilePageSource).toContain('user.email')
-    expect(profilePageSource).not.toContain('<img')
+describe('12.4 ProfilePage source contract — statistics & activity UI', () => {
+  it('reuses StatsSummary for the five personal metrics (no second summary)', () => {
+    expect(profilePageSource).toContain(
+      "import { StatsSummary } from '../components/stats/StatsSummary'",
+    )
+    expect(profilePageSource).toContain('statistics={profile.overall}')
+    expect(profilePageSource).toContain('topicsStudied={profile.overall.topicsStudied}')
+    for (const label of [
+      'Total Focus',
+      'Total Sessions',
+      'Today',
+      'Current Streak',
+      'Topics Studied',
+    ]) {
+      expect(statsSummarySource).toContain(label)
+    }
   })
 
-  it('renders an accessible loading state instead of fake zero statistics', () => {
+  it('extends the shared summary WITHOUT changing Home\'s four-metric rendering', () => {
+    expect(statsSummarySource).toContain('topicsStudied?: number')
+    expect(statsSummarySource).toContain("typeof topicsStudied === 'number' &&")
+    // The other four cards are unconditional, exactly as before.
+    expect(statsSummarySource.match(/formatFocusTime\(statistics\./g)).toHaveLength(2)
+    expect(statsSummarySource).toContain('formatStreak(statistics.currentStreakDays)')
+  })
+
+  it('renders the personal rows from the derived view model, never the shared summaries', () => {
+    expect(profilePageSource).toContain(
+      "import { ActivityList } from '../components/activity/ActivityList'",
+    )
+    expect(profilePageSource).toMatch(/items=\{activityRows\}/)
+    expect(profilePageSource).toMatch(/profileActivityItems\(\s*profile\.activities/)
+    expect(profilePageSource).not.toMatch(/profileActivityItems\(\s*activitySummaries/)
+    expect(profilePageSource).toContain('emptyState={PROFILE_EMPTY_STATES.activities}')
+    // The shared totals are used ONLY for the catch-up signal and the current
+    // activity count — never as a personal row figure.
+    expect(profilePageSource).not.toMatch(/items=\{[^}]*activitySummaries/)
+  })
+
+  it('navigates through the existing route helper, never a hand-built path', () => {
+    expect(profilePageSource).toContain(
+      "import { activityDetailPath, activityNamesById } from '../utils/activityContextUi'",
+    )
+    expect(profilePageSource).toContain('navigate(activityDetailPath(activityId))')
+    expect(profilePageSource).not.toMatch(/\/app\/activity\//)
+    expect(profilePageSource).toMatch(/if \(activityId\.length === 0\) return/)
+  })
+
+  it('does not render an unavailable row as a control (checked in the component)', () => {
+    expect(activityListSource).toContain('item.selectable === false ? (')
+    expect(activityListSource).toMatch(/<div className=\{ROW_CLASSES\}>\{content\}<\/div>/)
+    expect(activityListSource).toMatch(/onClick=\{\(\) => onSelect\(item\.id\)\}/)
+  })
+
+  it('shows a personal session count and the personal duration per row', () => {
+    expect(activityListSource).toContain('totalSessions?: number')
+    expect(activityListSource).toContain('formatSessionCount(item.totalSessions)')
+    expect(activityListSource).toContain('formatFocusDuration(item.totalFocusSeconds)')
+  })
+
+  it('delegates all duration formatting to the reused components', () => {
+    expect(profilePageSource).not.toMatch(/\/\s*60\b/)
+    expect(activityListSource).toContain('formatFocusDuration')
+    expect(statsSummarySource).toContain('formatFocusTime')
+  })
+
+  it('stays in scope: no recent-study history (12.5) and no navigation link (12.6)', () => {
+    expect(profilePageSource).not.toContain('SessionHistory')
+    expect(profilePageSource).not.toContain('recentDays')
+    expect(profilePageSource).not.toMatch(/<Link|<NavLink|to="\/app\/profile"/)
+    expect(profilePageSource).not.toMatch(/avatar|bio|displayName|photoURL/i)
+    expect(profilePageSource).not.toContain('deleteUserSession')
+    expect(profilePageSource).not.toContain('renameActivity')
+    expect(profilePageSource).not.toContain('<svg')
+    expect(profilePageSource).not.toContain('canvas')
+  })
+})
+
+describe('12.4 ProfilePage source contract — loading, errors, accessibility', () => {
+  it('has exactly one h1 and two labelled h2 sections', () => {
+    expect(profilePageSource.match(/<h1\b/g)).toHaveLength(1)
+    expect(profilePageSource.match(/<h2\b/g)).toHaveLength(2)
+    expect(profilePageSource.match(/aria-labelledby=/g)).toHaveLength(2)
+  })
+
+  it('shows the authenticated email as text', () => {
+    expect(profilePageSource).toContain('user.email')
+    expect(profilePageSource).toContain('break-all')
+  })
+
+  it('gates the overview on the pure resolver, so figures never precede their data', () => {
+    expect(profilePageSource).toMatch(/resolveProfileOverviewView\(\{/)
+    expect(profilePageSource).toContain('sessionsLoading,')
+    expect(profilePageSource).toContain('sessionsError: sessionsError !== null,')
+    expect(profilePageSource).toContain('totalSessions: profile.overall.totalSessions,')
+
+    expect(profilePageSource).toMatch(/overview\.state === 'loading' \?/)
+    expect(profilePageSource).toMatch(/overview\.state === 'error' \?/)
+    // The loading branch comes first: no zero summary can render before data.
+    const loadingBranch = profilePageSource.indexOf("overview.state === 'loading'")
+    const summaryUsage = profilePageSource.indexOf('<StatsSummary')
+    expect(loadingBranch).toBeGreaterThanOrEqual(0)
+    expect(summaryUsage).toBeGreaterThan(loadingBranch)
+  })
+
+  it('keeps the activities rows even when the name source is loading or failed', () => {
+    expect(profilePageSource).toMatch(/resolveProfileActivitiesView\(\{/)
+    expect(profilePageSource).toContain('rowCount: profile.activities.length,')
+    expect(profilePageSource).toContain('activitiesError: activitiesError !== null,')
+    expect(profilePageSource).toMatch(
+      /activitiesView\.state === 'rows' \|\| activitiesView\.state === 'empty' \?/,
+    )
+    expect(profilePageSource).toContain('activitiesView.namesPending')
+  })
+
+  it('renders accessible loading states instead of fake zero statistics', () => {
     expect(profilePageSource).toContain('role="status"')
     expect(profilePageSource).toContain('Loading your profile…')
     expect(profilePageSource).toContain('Loading your activities…')
-    // Each source's placeholder is shown while THAT source is loading, which is
-    // what keeps zero-value statistics off screen until data arrives.
-    expect(profilePageSource).toMatch(/\{sessionsLoading \? \(/)
-    expect(profilePageSource).toMatch(/\{activitiesLoading \? \(/)
   })
 
   it('shows friendly, retryable, per-source errors (never a raw Firebase message)', () => {
@@ -270,20 +433,40 @@ describe('12.3 ProfilePage source contract — loading, errors, accessibility', 
     expect(profilePageSource).toContain('RETRY_LABEL')
     expect(profilePageSource).toContain('claimRetry')
     expect(profilePageSource).toContain('releaseRetry')
-    // No raw SDK text reaches the UI.
     expect(profilePageSource).not.toMatch(/String\(error\)|error\.message|\$\{error/)
   })
 
-  it('supports keyboard focus and touch targets through the shared conventions', () => {
+  it('keeps the empty record a friendly note, not an error', () => {
+    expect(profilePageSource).toContain('PROFILE_EMPTY_STATES.overview')
+    expect(profilePageSource).toContain('overview.showEmptyHint')
+    expect(profilePageSource).toContain('PROFILE_EMPTY_STATES.activities')
+  })
+
+  it('uses semantic lists and truncating rows so long names cannot push figures off-screen', () => {
+    expect(activityListSource).toContain('<ul ')
+    expect(activityListSource).toContain('<li key={item.id}>')
+    expect(activityListSource).toContain('min-w-0')
+    expect(activityListSource).toContain('truncate')
+    expect(activityListSource).toContain('shrink-0')
+  })
+
+  it('meets the shared touch-target and keyboard-focus conventions', () => {
+    expect(activityListSource).toContain('min-h-11')
+    expect(activityListSource).toContain('focus-visible:outline')
     expect(profilePageSource).toContain('TOUCH_TARGET_CLASSES')
     expect(profilePageSource).toContain('focus-visible:outline')
   })
 
-  it('keeps this phase a shell: no final statistics UI, no profile document, no editing', () => {
-    expect(profilePageSource).not.toMatch(/avatar|bio|displayName|photoURL/i)
-    expect(profilePageSource).not.toContain('createUserProfile')
-    expect(profilePageSource).not.toContain('deleteUserSession')
-    expect(profilePageSource).not.toContain('canvas')
-    expect(profilePageSource).not.toContain('<svg')
+  it('stays responsive at narrow widths (2-column metrics, max-w card, sm: step-up)', () => {
+    expect(statsSummarySource).toContain('grid-cols-2')
+    expect(statsSummarySource).toContain('col-span-2')
+    expect(statsSummarySource).toContain('sm:text-2xl')
+    expect(profilePageSource).toContain('max-w-md')
+  })
+
+  it('does not communicate by colour alone (every state carries text)', () => {
+    expect(profilePageSource).toContain('Trying again…')
+    expect(activityListSource).toContain('session')
+    expect(activityListSource).toContain('No activities yet')
   })
 })

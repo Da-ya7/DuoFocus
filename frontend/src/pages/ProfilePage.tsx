@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSessionCatchUp } from '../hooks/useSessionCatchUp'
 import { subscribeUserSessions } from '../services/sessions'
 import { subscribeToUserActivitySummaries } from '../services/activities'
 import { calculateProfileStatistics } from '../utils/profileStats'
 import { PROFILE_TITLE } from '../utils/pageTitleUi'
-import { activityNamesById } from '../utils/activityContextUi'
-import { formatFocusDuration } from '../utils/activityUi'
+import { activityDetailPath, activityNamesById } from '../utils/activityContextUi'
+import {
+  PROFILE_EMPTY_STATES,
+  PROFILE_SECTION_META,
+  profileActivityItems,
+  resolveProfileActivitiesView,
+  resolveProfileOverviewView,
+} from '../utils/profileUi'
 import {
   RETRY_LABEL,
   claimRetry,
@@ -14,14 +21,15 @@ import {
   type RetryGuardRef,
 } from '../utils/dataRetryUi'
 import { TOUCH_TARGET_CLASSES } from '../utils/touchTargetUi'
+import { StatsSummary } from '../components/stats/StatsSummary'
+import { ActivityList } from '../components/activity/ActivityList'
 import type { ActivitySummary } from '../types/activity'
 import type { StudySession } from '../types/session'
 
 /**
- * Profile page shell — Phase 12.3 (data wiring + page shell only).
+ * Profile page — Phase 12.3 (data wiring) + Phase 12.4 (statistics & activity UI).
  *
- * Wires the user's EXISTING personal study record to the Phase 12.1 pure
- * statistics layer. No new data access is introduced:
+ * The data layer is unchanged from 12.3 and introduces no new access:
  *
  *   subscribeUserSessions            → users/{uid}/sessions (owner-scoped, realtime)
  *   subscribeToUserActivitySummaries → the member activities' CURRENT names + evidence
@@ -29,14 +37,20 @@ import type { StudySession } from '../types/session'
  *   activityNamesById                → activityId → current name (existing UX-014 map)
  *   calculateProfileStatistics       → the pure Profile view model
  *
- * The two sources are INDEPENDENT (Home's pattern): each one owns its loading
- * flag, its friendly error, its retry guard, and its attempt counter, so one
- * failure never hides the other's already-loaded data. Exactly one listener is
- * created per source (two total) and each effect returns its unsubscribe.
+ * EVERY figure on this page is the signed-in user's OWN time, derived from that
+ * view model: the shared activity totals Home and Activity Detail show are
+ * never used here, and nothing is summed in JSX. The per-activity rows carry
+ * the user's personal duration and personal session count, labelled with each
+ * activity's current name (or the existing safe fallback when a name cannot be
+ * resolved — those sessions still count toward every total).
  *
- * This phase deliberately renders only a minimal data-ready shell — the metric
- * cards, activity rows, and timeline belong to later phases. Nothing here
- * computes a total: every number comes from the pure view model.
+ * The two sources stay INDEPENDENT (Home's pattern): each owns its loading
+ * flag, friendly error, retry guard and attempt counter, so one failure never
+ * hides the other's already-loaded data. Exactly one listener is created per
+ * source (two total) and each effect returns its unsubscribe.
+ *
+ * Deliberately out of scope: recent-study history (Phase 12.5) and the
+ * navigation link to this page (Phase 12.6).
  */
 
 /** Friendly, retryable copy — never a raw Firebase message (Home's convention). */
@@ -46,6 +60,8 @@ const ACTIVITIES_ERROR_MESSAGE = 'Could not load your activities.'
 /** Shared placeholder/panel styling (Home's existing loading + panel design). */
 const PANEL_CLASSES =
   'rounded-lg border border-slate-100 bg-slate-50 p-6 text-center text-xs text-slate-500'
+const EMPTY_PANEL_CLASSES =
+  'rounded-lg border border-slate-100 bg-slate-50/80 p-4 text-center'
 const ERROR_PANEL_CLASSES = 'rounded-lg border border-red-200 bg-red-50 p-3 text-center'
 const ERROR_TEXT_CLASSES = 'text-xs text-red-700'
 const ERROR_RETRY_BUTTON_CLASSES = `${TOUCH_TARGET_CLASSES} mt-2 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-not-allowed disabled:opacity-60`
@@ -54,6 +70,7 @@ const ADVISORY_RETRY_BUTTON_CLASSES = `${TOUCH_TARGET_CLASSES} mt-2 rounded-lg b
 
 export function ProfilePage() {
   const { user, loading: authLoading } = useAuth()
+  const navigate = useNavigate()
   const uid = user?.uid ?? null
 
   // Phase 11.25 title infrastructure — one constant, never a scattered literal.
@@ -74,6 +91,14 @@ export function ProfilePage() {
   const [activitiesError, setActivitiesError] = useState<string | null>(null)
   const activitiesRetryGuardRef = useRef<RetryGuardRef>({ current: false })
   const [activitiesAttempt, setActivitiesAttempt] = useState(0)
+
+  // ---- Identity guards — a uid change is a DIFFERENT user ----
+  // The services are owner-scoped, but React state is not: without this, a
+  // switch from user A to user B could briefly render A's record while B's first
+  // snapshot is still in flight. A retry keeps the same uid, so it never clears
+  // data that is still the current identity's own.
+  const sessionsUidRef = useRef<string | null>(null)
+  const activitiesUidRef = useRef<string | null>(null)
 
   // ---- Shared catch-up lifecycle (Phase 12.2) — the SAME lifecycle as Home ----
   // The hook reads only { id, totalFocusSeconds }, so the member summaries are
@@ -98,10 +123,15 @@ export function ProfilePage() {
   // so one lifecycle can never leave two listeners behind.
   useEffect(() => {
     if (!uid) {
+      sessionsUidRef.current = null
       setSessions([])
       setSessionsLoading(false)
       releaseRetry(sessionsRetryGuardRef.current)
       return undefined
+    }
+    if (sessionsUidRef.current !== uid) {
+      sessionsUidRef.current = uid
+      setSessions([]) // never the previous identity's record
     }
     setSessionsLoading(true)
     setSessionsError(null)
@@ -127,10 +157,15 @@ export function ProfilePage() {
   // change is reflected without a reload.
   useEffect(() => {
     if (!uid) {
+      activitiesUidRef.current = null
       setActivitySummaries([])
       setActivitiesLoading(false)
       releaseRetry(activitiesRetryGuardRef.current)
       return undefined
+    }
+    if (activitiesUidRef.current !== uid) {
+      activitiesUidRef.current = uid
+      setActivitySummaries([])
     }
     setActivitiesLoading(true)
     setActivitiesError(null)
@@ -166,6 +201,32 @@ export function ProfilePage() {
     [sessions, activityNames],
   )
 
+  // ---- Phase 12.4 — presentation decisions (pure; no figure is computed here) ----
+  const overview = useMemo(
+    () =>
+      resolveProfileOverviewView({
+        sessionsLoading,
+        sessionsError: sessionsError !== null,
+        totalSessions: profile.overall.totalSessions,
+      }),
+    [sessionsLoading, sessionsError, profile.overall.totalSessions],
+  )
+
+  const activitiesView = useMemo(
+    () =>
+      resolveProfileActivitiesView({
+        rowCount: profile.activities.length,
+        activitiesLoading,
+        activitiesError: activitiesError !== null,
+      }),
+    [profile.activities.length, activitiesLoading, activitiesError],
+  )
+
+  const activityRows = useMemo(
+    () => profileActivityItems(profile.activities, { namesPending: activitiesView.namesPending }),
+    [profile.activities, activitiesView.namesPending],
+  )
+
   // Retry: the guard closes the window between the click and the re-render that
   // replaces the error panel with the loading panel (Home's UX-007 pattern), so
   // a double click can never start two subscriptions.
@@ -178,6 +239,17 @@ export function ProfilePage() {
     if (!claimRetry(activitiesRetryGuardRef.current)) return
     setActivitiesAttempt((attempt) => attempt + 1)
   }, [])
+
+  // The existing route helper is the single source of the Activity Detail path
+  // (UX-012) — no route string is built here. The unavailable bucket is never
+  // selectable; the guard is the second line of defense.
+  const openActivity = useCallback(
+    (activityId: string) => {
+      if (activityId.length === 0) return
+      navigate(activityDetailPath(activityId))
+    },
+    [navigate],
+  )
 
   if (authLoading) {
     return (
@@ -200,28 +272,29 @@ export function ProfilePage() {
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
         <div className="text-center">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">Study Profile</h1>
-          <p className="mt-2 text-sm text-slate-600 break-all">
+          <p className="mt-2 break-all text-sm text-slate-600">
             Signed in as {user.email ?? 'Unknown User'}
           </p>
         </div>
 
-        {/* ---- PERSONAL scope: the user's own study record ---- */}
-        <div
+        {/* ---- PERSONAL scope: this user's own study record ---- */}
+        <section
           className="mt-8 border-t border-slate-200 pt-6"
-          aria-labelledby="profile-sessions-heading"
+          aria-labelledby="profile-overview-heading"
         >
           <h2
-            id="profile-sessions-heading"
+            id="profile-overview-heading"
             className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500"
           >
-            Study sessions
+            {PROFILE_SECTION_META.overview.heading}
           </h2>
+          <p className="mb-3 text-xs text-slate-400">{PROFILE_SECTION_META.overview.caption}</p>
 
-          {sessionsLoading ? (
+          {overview.state === 'loading' ? (
             <p role="status" className={PANEL_CLASSES}>
               Loading your profile…
             </p>
-          ) : sessionsError ? (
+          ) : overview.state === 'error' ? (
             <div className={ERROR_PANEL_CLASSES}>
               <p role="alert" className={ERROR_TEXT_CLASSES}>
                 {sessionsError}
@@ -236,19 +309,23 @@ export function ProfilePage() {
               </button>
             </div>
           ) : (
-            <p className={PANEL_CLASSES}>
-              {profile.overall.totalSessions === 0
-                ? 'No study sessions yet.'
-                : `${profile.overall.totalSessions} study session${
-                    profile.overall.totalSessions === 1 ? '' : 's'
-                  } · ${formatFocusDuration(profile.overall.totalFocusSeconds)} focused${
-                    profile.overall.topicsStudied === 0
-                      ? ''
-                      : ` · ${profile.overall.topicsStudied} topic${
-                          profile.overall.topicsStudied === 1 ? '' : 's'
-                        }`
-                  }`}
-            </p>
+            <>
+              <StatsSummary
+                statistics={profile.overall}
+                topicsStudied={profile.overall.topicsStudied}
+              />
+
+              {overview.showEmptyHint && (
+                <div className={`mt-3 ${EMPTY_PANEL_CLASSES}`}>
+                  <p className="text-xs text-slate-500">
+                    {PROFILE_EMPTY_STATES.overview.message}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {PROFILE_EMPTY_STATES.overview.hint}
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           {/* The catch-up advisory uses the SHARED Phase 12.2 mechanism. */}
@@ -265,10 +342,10 @@ export function ProfilePage() {
               </button>
             </div>
           )}
-        </div>
+        </section>
 
-        {/* ---- SHARED scope: the member activities sessions resolve against ---- */}
-        <div
+        {/* ---- SHARED scope: the member activities the personal rows resolve against ---- */}
+        <section
           className="mt-8 border-t border-slate-200 pt-6"
           aria-labelledby="profile-activities-heading"
         >
@@ -276,14 +353,19 @@ export function ProfilePage() {
             id="profile-activities-heading"
             className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500"
           >
-            Activities
+            {PROFILE_SECTION_META.activities.heading}
           </h2>
+          <p className="mb-3 text-xs text-slate-400">{PROFILE_SECTION_META.activities.caption}</p>
 
-          {activitiesLoading ? (
-            <p role="status" className={PANEL_CLASSES}>
-              Loading your activities…
+          {/* The activity list's own data stays visible even with no session rows. */}
+          {!activitiesLoading && !activitiesError && activitySummaries.length > 0 && (
+            <p className="mb-3 text-xs text-slate-400">
+              Currently in {activitySummaries.length}{' '}
+              {activitySummaries.length === 1 ? 'activity' : 'activities'}.
             </p>
-          ) : activitiesError ? (
+          )}
+
+          {activitiesView.nameSourceError && (
             <div className={ERROR_PANEL_CLASSES}>
               <p role="alert" className={ERROR_TEXT_CLASSES}>
                 {activitiesError}
@@ -297,16 +379,20 @@ export function ProfilePage() {
                 {RETRY_LABEL}
               </button>
             </div>
-          ) : (
-            <p className={PANEL_CLASSES}>
-              {activitySummaries.length === 0
-                ? 'No activities yet.'
-                : `${activitySummaries.length} current ${
-                    activitySummaries.length === 1 ? 'activity' : 'activities'
-                  }`}
-            </p>
           )}
-        </div>
+
+          {activitiesView.state === 'rows' || activitiesView.state === 'empty' ? (
+            <ActivityList
+              items={activityRows}
+              onSelect={openActivity}
+              emptyState={PROFILE_EMPTY_STATES.activities}
+            />
+          ) : activitiesView.state === 'loading' ? (
+            <p role="status" className={PANEL_CLASSES}>
+              Loading your activities…
+            </p>
+          ) : null}
+        </section>
       </div>
     </section>
   )
