@@ -164,6 +164,45 @@ export async function adminSetDoc(path: string, fields: Record<string, RestValue
   }
 }
 
+/** One rules-exempt document write in a batched commit. */
+export interface AdminWrite {
+  /** Path form: "users/uid/sessions/id" (no leading slash). */
+  path: string
+  fields: Record<string, RestValue>
+}
+
+/**
+ * Creates/overwrites many documents in as few commits as possible (≤500 writes
+ * per commit, the Firestore commit limit). Rules-exempt FIXTURE seeding only.
+ *
+ * Phase 12.9 uses this to build MORE than the old 1000-document query cap in
+ * one shot, instead of 1000+ sequential HTTP requests.
+ */
+export async function adminBatchSetDocs(writes: readonly AdminWrite[]): Promise<void> {
+  const COMMIT_LIMIT = 500
+  for (let index = 0; index < writes.length; index += COMMIT_LIMIT) {
+    const chunk = writes.slice(index, index + COMMIT_LIMIT)
+    const res = await fetch(
+      `${FIRESTORE_HOST}/v1/projects/${TEST_PROJECT_ID}/databases/(default)/documents:commit`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+        body: JSON.stringify({
+          writes: chunk.map((write) => ({
+            update: {
+              name: `projects/${TEST_PROJECT_ID}/databases/(default)/documents/${write.path}`,
+              fields: write.fields,
+            },
+          })),
+        }),
+      },
+    )
+    if (!res.ok) {
+      throw new Error(`adminBatchSetDocs failed: HTTP ${res.status} ${await res.text()}`)
+    }
+  }
+}
+
 /** Deletes one document with rules disabled (fixture lifecycle, e.g. room deletion). */
 export async function adminDeleteDoc(path: string): Promise<void> {
   const res = await fetch(docUrl(path), { method: 'DELETE', headers: adminHeaders() })

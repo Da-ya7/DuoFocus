@@ -391,7 +391,9 @@ describe('12.5 ProfilePage source contract — recent study history', () => {
     expect(profilePageSource).toContain(
       "import { SessionHistory } from '../components/stats/SessionHistory'",
     )
-    expect(profilePageSource).toContain('sessions={sessions}')
+    // Phase 12.9: the list is bounded through the shared recentSessions helper
+    // (the complete stream still feeds the statistics above).
+    expect(profilePageSource).toContain('sessions={recentSessions(sessions)}')
     expect(profilePageSource).toContain('activityLookup={sessionActivityLookup}')
     expect(profilePageSource).toContain('emptyState={PROFILE_EMPTY_STATES.history}')
   })

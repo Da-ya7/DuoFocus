@@ -16,6 +16,7 @@ import {
 } from 'firebase/firestore'
 import { ACTIVITY_ID_BATCH_SIZE } from './activities'
 import { auth, db } from './firebase'
+import { RECENT_SESSION_HISTORY_LIMIT } from '../utils/sessionHistoryUi'
 import {
   SessionError,
   type RoomCompletion,
@@ -37,9 +38,6 @@ const ROOMS = 'rooms'
 const COMPLETIONS = 'completions'
 const USERS = 'users'
 const SESSIONS = 'sessions'
-
-/** Default limit for fetching user study history on dashboard. */
-export const DEFAULT_SESSION_HISTORY_LIMIT = 1000
 
 // ---------------------------------------------------------------------------
 // Helpers & Error Mapping
@@ -422,9 +420,14 @@ function toStudySession(docId: string, data: Record<string, unknown>): StudySess
 
 /**
  * Retrieves the authenticated user's session history ordered reverse-chronologically.
+ *
+ * One-shot, and deliberately BOUNDED: this is a page/one-off history read, not
+ * the statistics source. The realtime stream (subscribeUserSessions) is the
+ * complete source of lifetime figures (Phase 12.9); this helper keeps a bounded
+ * default so a plain history fetch can never be unbounded.
  */
 export async function getUserSessions(
-  limitCount = DEFAULT_SESSION_HISTORY_LIMIT,
+  limitCount = RECENT_SESSION_HISTORY_LIMIT,
 ): Promise<StudySession[]> {
   const uid = requireUid()
   try {
@@ -447,18 +450,21 @@ export async function getUserSessions(
  * SDK's raw object), so a consumer that surfaces the failure keeps the app's
  * existing error taxonomy and never shows a raw Firebase error. The optional
  * callback is unchanged in shape — only the classification is added.
+ *
+ * Phase 12.9: the query carries NO `limit()`. This one stream is the app's
+ * source for lifetime statistics (Profile and Home derive totals, today's
+ * focus, streaks, and per-activity figures from it), so a bounded query would
+ * silently truncate every figure for a user past the cap. It now delivers the
+ * user's COMPLETE private history (owner-scoped, so the volume is one person's
+ * own record), and the recent-session LIST is bounded separately at the UI edge
+ * (src/utils/sessionHistoryUi.recentSessions).
  */
 export function subscribeUserSessions(
   onUpdate: (sessions: StudySession[]) => void,
   onError?: (error: unknown) => void,
-  limitCount = DEFAULT_SESSION_HISTORY_LIMIT,
 ): Unsubscribe {
   const uid = requireUid()
-  const q = query(
-    collection(db, USERS, uid, SESSIONS),
-    orderBy('completedAt', 'desc'),
-    limit(limitCount),
-  )
+  const q = query(collection(db, USERS, uid, SESSIONS), orderBy('completedAt', 'desc'))
 
   return onSnapshot(
     q,

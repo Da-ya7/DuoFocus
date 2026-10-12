@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSessionCatchUp } from '../hooks/useSessionCatchUp'
 import { subscribeUserSessions } from '../services/sessions'
+import { recentSessions } from '../utils/sessionHistoryUi'
 import { subscribeToUserActivitySummaries } from '../services/activities'
 import { calculateProfileStatistics } from '../utils/profileStats'
 import { PROFILE_TITLE } from '../utils/pageTitleUi'
@@ -418,7 +419,7 @@ export function ProfilePage() {
             // destructive flow stays a Home feature. Newest first is the
             // subscription's own completedAt-descending order — no second sort.
             <SessionHistory
-              sessions={sessions}
+              sessions={recentSessions(sessions)}
               activityLookup={sessionActivityLookup}
               emptyState={PROFILE_EMPTY_STATES.history}
             />

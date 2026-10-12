@@ -31,13 +31,13 @@ import {
 } from './helpers'
 
 import {
-  DEFAULT_SESSION_HISTORY_LIMIT,
   deleteUserSession,
   getUserSessions,
   recordCompletedSession,
   subscribeUserSessions,
   syncMissedRoomCompletions,
 } from '../../src/services/sessions'
+import { RECENT_SESSION_HISTORY_LIMIT } from '../../src/utils/sessionHistoryUi'
 import { SessionError } from '../../src/types/session'
 
 beforeAll(() => {
@@ -231,7 +231,9 @@ describe('D. session service integration', () => {
     // Newest session corresponds to the LAST completion recorded.
     expect(sessions[0]!.completionId).toBe(ids[2])
     expect(sessions[2]!.completionId).toBe(ids[0])
-    expect(DEFAULT_SESSION_HISTORY_LIMIT).toBe(1000)
+    // Phase 12.9: the display bound stays 1000; the STREAM is no longer capped
+    // (its completeness is proven in sessionHistoryCompleteness.test.ts).
+    expect(RECENT_SESSION_HISTORY_LIMIT).toBe(1000)
   })
 
   it('D7: subscribeUserSessions streams persisted sessions and unsubscribes cleanly', async () => {

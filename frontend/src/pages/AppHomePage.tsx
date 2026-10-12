@@ -19,6 +19,7 @@ import {
 } from '../utils/roomEntryUi'
 import { HOME_TITLE } from '../utils/pageTitleUi'
 import { deleteUserSession, subscribeUserSessions } from '../services/sessions'
+import { recentSessions } from '../utils/sessionHistoryUi'
 import { subscribeToUserActivitySummaries } from '../services/activities'
 import { calculateStudyStatistics } from '../utils/stats'
 import { resolveRoomTopic } from '../utils/activityUi'
@@ -571,7 +572,7 @@ export function AppHomePage() {
               )}
 
               <SessionHistory
-                sessions={sessions}
+                sessions={recentSessions(sessions)}
                 onRequestDelete={handleRequestDeleteSession}
                 onConfirmDelete={handleDeleteSession}
                 onCancelDelete={handleCancelDeleteSession}
