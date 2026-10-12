@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Link, Outlet } from 'react-router-dom'
+import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { navLinkClasses } from '../utils/navUi'
 
 export function AppLayout() {
   const { user, loading, logout } = useAuth()
@@ -28,21 +29,18 @@ export function AppLayout() {
           <nav className="flex items-center gap-4 text-sm">
             {loading ? null : user ? (
               <>
-                <Link
-                  to="/app"
-                  className="font-medium text-slate-700 hover:text-slate-900"
-                >
+                {/* Phase 12.7: NavLink highlights the current section and adds
+                    its accessible current-page marker on its own. `end` on /app is required so
+                    the Home link stays inactive on /app/profile and other nested
+                    pages; /app/profile is a leaf and matches only itself. The
+                    whole class list (incl. the focus-visible ring) lives in the
+                    shared navLinkClasses helper. */}
+                <NavLink to="/app" end className={navLinkClasses}>
                   App
-                </Link>
-                {/* Phase 12.6: the existing Profile page becomes reachable. Same
-                    link styling as the App item, plus the app-wide focus-visible
-                    ring (11.24 convention) so keyboard users can see it. */}
-                <Link
-                  to="/app/profile"
-                  className="font-medium text-slate-700 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
-                >
+                </NavLink>
+                <NavLink to="/app/profile" className={navLinkClasses}>
                   Profile
-                </Link>
+                </NavLink>
                 <div className="flex flex-col items-end gap-1">
                   <button
                     type="button"
