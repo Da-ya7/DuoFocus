@@ -1,4 +1,5 @@
 import type { StudyStatistics } from '../../types/session'
+import { formatFocusDuration } from '../../utils/activityUi'
 
 export interface StatsSummaryProps {
   statistics: StudyStatistics
@@ -9,24 +10,6 @@ export interface StatsSummaryProps {
    * is unchanged.
    */
   topicsStudied?: number
-}
-
-/**
- * Formats a total duration in seconds to a human-readable focus string:
- * 0 -> "0m", 60 -> "1m", 1500 -> "25m", 3600 -> "1h", 3660 -> "1h 1m".
- */
-function formatFocusTime(seconds: number): string {
-  const totalMinutes = Math.floor(Math.max(0, seconds) / 60)
-  const hours = Math.floor(totalMinutes / 60)
-  const mins = totalMinutes % 60
-
-  if (hours === 0) {
-    return `${mins}m`
-  }
-  if (mins === 0) {
-    return `${hours}h`
-  }
-  return `${hours}h ${mins}m`
 }
 
 /**
@@ -52,6 +35,11 @@ function formatCount(value: number): string {
  * Streak — plus, when supplied, the caller's own topic count (Phase 12.4's
  * Profile). It only formats what it is given: every figure arrives already
  * computed by the pure statistics layer, and no total is derived here.
+ *
+ * Phase 12.11: duration text is delegated to the ONE shared formatFocusDuration
+ * (src/utils/activityUi.ts, which carries the finite-number guard), so the
+ * summary, the session list, and the activity views cannot disagree about how
+ * focus time reads and no duration formatter is duplicated here.
  */
 export function StatsSummary({ statistics, topicsStudied }: StatsSummaryProps) {
   return (
@@ -61,7 +49,7 @@ export function StatsSummary({ statistics, topicsStudied }: StatsSummaryProps) {
           Total Focus
         </p>
         <p className="mt-1.5 font-mono text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-          {formatFocusTime(statistics.totalFocusSeconds)}
+          {formatFocusDuration(statistics.totalFocusSeconds)}
         </p>
       </div>
 
@@ -79,7 +67,7 @@ export function StatsSummary({ statistics, topicsStudied }: StatsSummaryProps) {
           Today
         </p>
         <p className="mt-1.5 font-mono text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-          {formatFocusTime(statistics.todayFocusSeconds)}
+          {formatFocusDuration(statistics.todayFocusSeconds)}
         </p>
       </div>
 

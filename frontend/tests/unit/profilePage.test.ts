@@ -330,7 +330,7 @@ describe('12.4 ProfilePage source contract — statistics & activity UI', () => 
     expect(statsSummarySource).toContain('topicsStudied?: number')
     expect(statsSummarySource).toContain("typeof topicsStudied === 'number' &&")
     // The other four cards are unconditional, exactly as before.
-    expect(statsSummarySource.match(/formatFocusTime\(statistics\./g)).toHaveLength(2)
+    expect(statsSummarySource.match(/formatFocusDuration\(statistics\./g)).toHaveLength(2)
     expect(statsSummarySource).toContain('formatStreak(statistics.currentStreakDays)')
   })
 
@@ -374,7 +374,7 @@ describe('12.4 ProfilePage source contract — statistics & activity UI', () => 
   it('delegates all duration formatting to the reused components', () => {
     expect(profilePageSource).not.toMatch(/\/\s*60\b/)
     expect(activityListSource).toContain('formatFocusDuration')
-    expect(statsSummarySource).toContain('formatFocusTime')
+    expect(statsSummarySource).toContain('formatFocusDuration')
   })
 
   it('stays in scope: no navigation link (12.6) and no profile features beyond this phase', () => {

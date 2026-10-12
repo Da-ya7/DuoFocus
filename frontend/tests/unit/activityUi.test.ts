@@ -86,6 +86,14 @@ describe('formatFocusDuration — shared focus time display', () => {
     expect(formatFocusDuration(-100)).toBe('0m')
     expect(formatFocusDuration(Number.NaN)).toBe('0m')
     expect(formatFocusDuration(Number.POSITIVE_INFINITY)).toBe('0m')
+    expect(formatFocusDuration(Number.NEGATIVE_INFINITY)).toBe('0m')
+  })
+
+  it('truncates toward zero minutes at the minute/hour boundaries', () => {
+    expect(formatFocusDuration(59)).toBe('0m')
+    expect(formatFocusDuration(119)).toBe('1m')
+    expect(formatFocusDuration(3599)).toBe('59m')
+    expect(formatFocusDuration(3601)).toBe('1h')
   })
 })
 

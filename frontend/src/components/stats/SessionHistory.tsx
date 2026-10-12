@@ -11,6 +11,7 @@ import {
   resolveSessionActivity,
   type SessionActivityLookup,
 } from '../../utils/activityContextUi'
+import { formatFocusDuration } from '../../utils/activityUi'
 import { TOUCH_TARGET_CLASSES } from '../../utils/touchTargetUi'
 import type { HomeEmptyState } from '../../utils/homeUi'
 
@@ -63,24 +64,6 @@ function formatCompletedAt(ts: TimestampLike | undefined | null): string {
     minute: '2-digit',
     hour12: true,
   })
-}
-
-/**
- * Formats a duration in seconds into a human-readable focus string:
- * 0 -> "0m", 60 -> "1m", 1500 -> "25m", 3660 -> "1h 1m".
- */
-function formatDuration(seconds: number): string {
-  const totalMinutes = Math.floor(Math.max(0, seconds) / 60)
-  const hours = Math.floor(totalMinutes / 60)
-  const mins = totalMinutes % 60
-
-  if (hours === 0) {
-    return `${mins}m`
-  }
-  if (mins === 0) {
-    return `${hours}h`
-  }
-  return `${hours}h ${mins}m`
 }
 
 /**
@@ -175,7 +158,7 @@ export function SessionHistory({
                 {session.roomCode ? `ROOM ${session.roomCode}` : 'ROOM'}
               </span>
               <span className="rounded bg-slate-900/5 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                {formatDuration(session.durationSeconds)}
+                {formatFocusDuration(session.durationSeconds)}
               </span>
             </div>
 
