@@ -8,9 +8,14 @@ import { SESSION_ACTIVITY_UNAVAILABLE_LABEL } from './activityContextUi'
  *
  * Turns the user's existing PERSONAL session records
  * (users/{uid}/sessions — one StudySession per completed study event the user
- * personally took part in) into the derived shape the future Profile page
- * needs: overall totals, per-activity personal totals, and recent study
- * grouped by local calendar day.
+ * personally took part in) into the derived shape the Profile page needs:
+ * overall totals and per-activity personal totals.
+ *
+ * The recent-session UI does NOT consume a derived shape from here: the page
+ * renders the existing session list directly (bounded by
+ * src/utils/sessionHistoryUi.recentSessions). This module derives only what is
+ * actually rendered — the old unused `recentDays` grouping was removed in
+ * Phase 12.10.
  *
  * PERSONAL SCOPE (deliberate, and the whole point of this module):
  * per-activity numbers come from the user's OWN sessions, never from shared
@@ -36,10 +41,10 @@ import { SESSION_ACTIVITY_UNAVAILABLE_LABEL } from './activityContextUi'
  *     formatLastStudied) stays in src/utils/activityUi.ts and is applied by
  *     the UI, never by this module — no duration formatter is duplicated here.
  *
- * Date semantics mirror src/utils/stats.ts exactly (the same private helpers
- * are restated here because that module keeps them private, following the
- * precedent already set by src/utils/activityStats.ts): "today" is the LOCAL
- * calendar day, and study days are keyed 'YYYY-MM-DD' in local time.
+ * Date semantics come from the SAME source as the app's other totals: "today",
+ * streaks, and every aggregate are produced by calculateStudyStatistics
+ * (src/utils/stats.ts). The only date logic restated here is timestampToDate,
+ * used solely to pick each activity's lastStudiedAt.
  *
  * Invalid data follows the established stats.ts policy, unchanged: NaN,
  * Infinity, and negative durations contribute zero focus time (while still
@@ -64,19 +69,6 @@ function timestampToDate(ts: TimestampLike | undefined | null): Date | null {
   const nanoseconds = Number.isFinite(ts.nanoseconds) ? (ts.nanoseconds as number) : 0
   const date = new Date(seconds * 1000 + Math.floor(nanoseconds / 1_000_000))
   return isNaN(date.getTime()) ? null : date
-}
-
-/**
- * Formats a Date into a local calendar day key 'YYYY-MM-DD'.
- *
- * Keys sort lexicographically, which is what makes the newest-first day
- * ordering below a plain string comparison.
- */
-function getLocalDateKey(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
 }
 
 /**
@@ -151,29 +143,6 @@ export interface ProfileActivityStatistics {
   lastStudiedAt: TimestampLike | null
 }
 
-/** One session row inside a recent-study day. */
-export interface ProfileRecentSession {
-  /** Activity identity as stored on the session ('' for the fallback bucket). */
-  activityId: string
-  /** CURRENT display name, or a safe label when unresolvable. */
-  activityName: string
-  /**
-   * Focus seconds, normalized with the same clamp as the aggregates above so
-   * an invalid stored duration can never reach the UI as NaN/negative.
-   */
-  durationSeconds: number
-  /** The session's completion timestamp (valid by construction here). */
-  completedAt: TimestampLike
-}
-
-/** Recent study for one LOCAL calendar day. */
-export interface ProfileRecentDay {
-  /** Local calendar day key 'YYYY-MM-DD' (same semantics as stats.ts). */
-  date: string
-  /** That day's sessions, newest completedAt first. */
-  sessions: ProfileRecentSession[]
-}
-
 /** The complete derived Profile view. */
 export interface ProfileStatistics {
   overall: ProfileOverallStatistics
@@ -188,8 +157,6 @@ export interface ProfileStatistics {
    * grouped under PROFILE_UNAVAILABLE_ACTIVITY_ID so the sums still close.
    */
   activities: ProfileActivityStatistics[]
-  /** Local days containing at least one timestamp-valid session, newest day first. */
-  recentDays: ProfileRecentDay[]
 }
 
 // ---------------------------------------------------------------------------
@@ -233,8 +200,7 @@ interface ActivityAccumulator {
  * Derives the complete Profile view from the user's personal sessions.
  *
  * Pure: no side effects, no mutation of `sessions`, no I/O. An empty session
- * list yields the zero shape (0 totals, 0 topics, no rows, no days) — never an
- * error.
+ * list yields the zero shape (0 totals, 0 topics, no rows) — never an error.
  *
  * @param sessions      The user's StudySession records (users/{uid}/sessions).
  * @param activityNames `activityId → current name` map (see activityNamesById).
@@ -307,49 +273,6 @@ export function calculateProfileStatistics(
       b.totalFocusSeconds - a.totalFocusSeconds || a.activityName.localeCompare(b.activityName),
   )
 
-  // ---- Recent study (local days, newest day first, newest session first) ----
-  const byDay = new Map<string, ProfileRecentSession[]>()
-
-  for (const session of safeSessions) {
-    if (!session) {
-      continue
-    }
-    // Only timestamp-valid sessions have a calendar day; anything else is
-    // already counted in the totals above and is simply not "recent".
-    const completedDate = timestampToDate(session.completedAt)
-    if (!completedDate) {
-      continue
-    }
-    const dateKey = getLocalDateKey(completedDate)
-    const activityId = normalizeActivityId(session.activityId)
-    const row: ProfileRecentSession = {
-      activityId,
-      activityName: resolveProfileActivityName(activityId, activityNames),
-      durationSeconds: effectiveDurationSeconds(session.durationSeconds),
-      completedAt: session.completedAt,
-    }
-    const rows = byDay.get(dateKey)
-    if (rows) {
-      rows.push(row)
-    } else {
-      byDay.set(dateKey, [row])
-    }
-  }
-
-  const recentDays: ProfileRecentDay[] = Array.from(byDay.entries())
-    .map(([date, rows]) => ({
-      date,
-      // Newest completedAt first inside the day. Array.prototype.sort is
-      // stable, so equal timestamps keep their original order deterministically.
-      sessions: rows.sort(
-        (a, b) =>
-          (timestampToDate(b.completedAt)?.getTime() ?? 0) -
-          (timestampToDate(a.completedAt)?.getTime() ?? 0),
-      ),
-    }))
-    // Newest day first: day keys are lexicographically sortable 'YYYY-MM-DD'.
-    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
-
   const topicsStudied = Array.from(byActivity.keys()).filter(
     (activityId) => activityId !== PROFILE_UNAVAILABLE_ACTIVITY_ID,
   ).length
@@ -357,6 +280,5 @@ export function calculateProfileStatistics(
   return {
     overall: { ...base, topicsStudied },
     activities,
-    recentDays,
   }
 }

@@ -78,11 +78,10 @@ describe('calculateProfileStatistics — overall shape & zero history', () => {
         topicsStudied: 0,
       },
       activities: [],
-      recentDays: [],
     })
   })
 
-  it('P2: one session produces one activity row and one recent day', () => {
+  it('P2: one session produces one activity row', () => {
     const view = calculateProfileStatistics([session()], { activity1: 'DSA' }, NOW)
 
     expect(view.overall.totalFocusSeconds).toBe(1500)
@@ -95,16 +94,6 @@ describe('calculateProfileStatistics — overall shape & zero history', () => {
         totalFocusSeconds: 1500,
         totalSessions: 1,
         lastStudiedAt: tsLocal(daysAgoAt(1)),
-      },
-    ])
-    expect(view.recentDays).toHaveLength(1)
-    expect(view.recentDays[0]!.date).toBe('2026-01-14')
-    expect(view.recentDays[0]!.sessions).toEqual([
-      {
-        activityId: 'activity1',
-        activityName: 'DSA',
-        durationSeconds: 1500,
-        completedAt: tsLocal(daysAgoAt(1)),
       },
     ])
   })
@@ -343,30 +332,6 @@ describe('calculateProfileStatistics — ordering', () => {
     expect(reverse.activities.map((a) => a.activityId)).toEqual(['a', 'b'])
   })
 
-  it('P17: recent days are newest first and sessions within a day are newest first', () => {
-    const sessions = [
-      session({ activityId: 'dsa', completedAt: tsLocal(daysAgoAt(0, 9)), durationSeconds: 600 }),
-      session({ activityId: 'py', completedAt: tsLocal(daysAgoAt(0, 15)), durationSeconds: 1200 }),
-      session({ activityId: 'dsa', completedAt: tsLocal(daysAgoAt(0, 12)), durationSeconds: 900 }),
-      session({ activityId: 'dsa', completedAt: tsLocal(daysAgoAt(2, 10)), durationSeconds: 300 }),
-      session({ activityId: 'dsa', completedAt: tsLocal(daysAgoAt(1, 10)), durationSeconds: 1500 }),
-    ]
-    const view = calculateProfileStatistics(sessions, { dsa: 'DSA', py: 'Python' }, NOW)
-
-    expect(view.recentDays.map((day) => day.date)).toEqual([
-      '2026-01-15',
-      '2026-01-14',
-      '2026-01-13',
-    ])
-
-    const today = view.recentDays[0]!
-    expect(today.sessions.map((row) => row.durationSeconds)).toEqual([1200, 900, 600])
-    expect(today.sessions.map((row) => row.activityName)).toEqual(['Python', 'DSA', 'DSA'])
-
-    // Each day groups exactly its own sessions.
-    expect(view.recentDays[1]!.sessions).toHaveLength(1)
-    expect(view.recentDays[2]!.sessions).toHaveLength(1)
-  })
 })
 
 describe('calculateProfileStatistics — date semantics & invalid data (mirrors stats.ts)', () => {
@@ -378,8 +343,6 @@ describe('calculateProfileStatistics — date semantics & invalid data (mirrors 
 
     expect(view.overall.todayFocusSeconds).toBe(1500) // only the 00:01 session
     expect(view.overall.currentStreakDays).toBe(2) // consecutive local days
-    // Days are grouped by the SAME local keys — no second date definition.
-    expect(view.recentDays.map((day) => day.date)).toEqual(['2026-01-15', '2026-01-14'])
   })
 
   it('P19: the explicit now parameter drives today/streak deterministically', () => {
@@ -409,8 +372,6 @@ describe('calculateProfileStatistics — date semantics & invalid data (mirrors 
     expect(view.overall.todayFocusSeconds).toBe(0)
     expect(view.overall.totalSessions).toBe(3)
     expect(rowFor(view, 'dsa')).toMatchObject({ totalFocusSeconds: 0, totalSessions: 3 })
-    // The recent rows carry the normalized value too — never NaN/negative.
-    expect(view.recentDays[0]!.sessions.map((row) => row.durationSeconds)).toEqual([0, 0, 0])
     expect(view.overall.currentStreakDays).toBe(1) // the calendar day still counts
   })
 
@@ -426,9 +387,6 @@ describe('calculateProfileStatistics — date semantics & invalid data (mirrors 
     // Duration from the invalid-timestamp sessions is still counted.
     expect(rowFor(view, 'dsa')).toMatchObject({ totalFocusSeconds: 1800, totalSessions: 3 })
     expect(rowFor(view, 'dsa').lastStudiedAt).toEqual(valid)
-    // Only the one valid session produced a recent day.
-    expect(view.recentDays).toHaveLength(1)
-    expect(view.recentDays[0]!.sessions).toHaveLength(1)
     expect(view.overall.totalSessions).toBe(3)
     expect(view.overall.totalFocusSeconds).toBe(1800)
     expect(view.overall.currentStreakDays).toBe(0)
@@ -443,7 +401,6 @@ describe('calculateProfileStatistics — date semantics & invalid data (mirrors 
       NOW,
     )
     expect(rowFor(view, 'dsa')).toMatchObject({ totalFocusSeconds: 1500, totalSessions: 1, lastStudiedAt: null })
-    expect(view.recentDays).toEqual([])
   })
 })
 
@@ -461,9 +418,8 @@ describe('calculateProfileStatistics — purity', () => {
 
     expect(sessions.map((item) => item.id)).toEqual(before)
     expect(JSON.stringify(sessions)).toBe(snapshot)
-    // Sorting happened on derived arrays only.
+    // Sorting happened on the derived rows only.
     expect(view.activities.map((a) => a.activityId)).toEqual(['a', 'c', 'b'])
-    expect(view.recentDays[0]!.sessions).toHaveLength(2)
   })
 
   it('P24: is deterministic for identical inputs and tolerant of odd arguments', () => {

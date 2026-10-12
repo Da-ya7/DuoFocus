@@ -53,8 +53,12 @@ import type { StudySession } from '../types/session'
  *
  * The two sources stay INDEPENDENT (Home's pattern): each owns its loading
  * flag, friendly error, retry guard and attempt counter, so one failure never
- * hides the other's already-loaded data. Exactly one listener is created per
- * source (two total) and each effect returns its unsubscribe.
+ * hides the other's already-loaded data, and each effect returns its
+ * unsubscribe. The session source opens exactly ONE listener. The activity
+ * source opens one activity-list listener PLUS one bounded collection-group
+ * evidence listener per ⌈N/10⌉ batch of the user's member activities — one
+ * evidence listener (three Firestore targets in total) for the current
+ * single-batch case, and never one listener per activity.
  *
  * Phase 12.5 adds the recent-study section from the SAME session state: the
  * shared SessionHistory component renders the list read-only (no delete flow is

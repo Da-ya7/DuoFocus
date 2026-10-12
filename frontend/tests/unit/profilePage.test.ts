@@ -418,8 +418,8 @@ describe('12.5 ProfilePage source contract — recent study history', () => {
     expect(profilePageSource).toContain('completedAt-descending')
     expect(profilePageSource).not.toMatch(/\.sort\(/)
     // No second derivation of history: the flat StudySession[] flows straight
-    // into the component (profileStats.recentDays is a grouped shape the list
-    // does not consume).
+    // into the component. (Phase 12.10 removed the unused grouped `recentDays`
+    // shape from profileStats entirely, so the page cannot reference it.)
     expect(profilePageSource).not.toContain('recentDays')
     expect(profilePageSource).not.toMatch(/\/\s*60\b/)
   })
