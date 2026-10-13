@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
 
 // Phase 8.3 — Firestore security-rule tests.
 // Phase 8.4 — Pure unit tests (services with mocked firebase modules).
@@ -10,11 +11,18 @@ import { defineConfig } from 'vitest/config'
 // config is separate from vite.config.ts so the production build config
 // stays untouched.
 //
+// Phase 12.13 — DOM smoke tests. A small number of rendered-component tests
+// live in tests/dom/**/*.test.tsx and opt into jsdom per file via a
+// `// @vitest-environment jsdom` docblock, so every existing suite keeps the
+// Node environment. The React plugin is enabled here (the test config does not
+// load vite.config.ts) so .tsx files transform with the automatic JSX runtime.
+//
 // Phase 11.36 — globalSetup fail-fast preflight: before any suite runs, the
 // RUNNING Auth emulator must prove it is bound to the dummy duofocus-test
 // project (emulator-minted token aud), never the .firebaserc default
 // (production duofocus-cb9fb) — see tests/globalSetup.ts.
 export default defineConfig({
+  plugins: [react()],
   test: {
     globalSetup: './tests/globalSetup.ts',
     environment: 'node',
@@ -22,6 +30,7 @@ export default defineConfig({
       'tests/rules/**/*.test.ts',
       'tests/unit/**/*.test.ts',
       'tests/integration/**/*.test.ts',
+      'tests/dom/**/*.test.tsx',
     ],
     // All suites share one emulator instance and wipe its data between tests
     // (clearFirestore / admin REST), so files must not run concurrently.
