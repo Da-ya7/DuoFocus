@@ -15,9 +15,10 @@
  *       TYPED SessionError (permission-denied), never a raw Firebase error
  *
  * The React side — which control is rendered, the "Signing out…" state, and the
- * ProtectedRoute redirect to /login — is intentionally NOT covered here: the
- * suite runs in Vitest's Node environment and the repository has no DOM test
- * infrastructure (Phase 11.12 chose not to add jsdom/@testing-library).
+ * ProtectedRoute redirect to /login — is intentionally NOT covered here: this
+ * suite runs in Vitest's Node environment. That redirect IS rendered and
+ * asserted in the DOM suite that Phase 12.13's jsdom + React Testing Library
+ * setup made possible: tests/dom/protectedRoute.dom.test.tsx.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { FirebaseError } from 'firebase/app'
